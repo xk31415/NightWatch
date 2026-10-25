@@ -1,5 +1,7 @@
 # NightWatch
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Windows 看门狗服务。以 LocalSystem 运行时，可监控进程、Windows 服务、日志文件、系统资源和心跳，异常时告警，并可按配置自动拉起目标。
 
 通知支持企业微信、钉钉（加签）和 SMTP 邮件，可同时启用；告警按规则冷却，恢复时推送一次通知。告警标题前缀为「守夜人」。
@@ -476,3 +478,7 @@ dotnet test src\NightWatch.Tests
 `Properties/launchSettings.json` 会把环境设为 Development，此时不检查安装目录和配置文件的 ACL。
 
 新增监控类型：在 `WatchDogOptions` 增加规则 → 继承 `PollingMonitorBase` 并实现 `CheckAllAsync` → 用 `ReportAsync` 上报 → 在 `Program.cs` 按条件 `AddHostedService`。
+
+## 开源协议
+
+本项目基于 [MIT License](LICENSE) 开源。Copyright (c) 2026 守夜人 (NightWatch)。

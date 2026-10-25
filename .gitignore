@@ -32,3 +32,6 @@ Thumbs.db
 
 # WorkBuddy 工作区数据（AI 助手内部记忆，非项目代码）
 .workbuddy/
+
+# 部署打包产物
+*.tar.gz
