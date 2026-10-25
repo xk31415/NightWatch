@@ -10,7 +10,13 @@ public abstract class PollingMonitorBase : BackgroundService
 {
     private readonly IEventNotifier _notifier;
     private readonly Dictionary<string, DateTime> _lastAlertUtc = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>当前处于异常状态的规则（与是否推送无关，用于状态机判定）。</summary>
     private readonly HashSet<string> _unhealthyRules = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>本轮到异常期间真正推送过告警的规则：只有它们恢复时才发恢复通知。</summary>
+    private readonly HashSet<string> _alertedRules = new(StringComparer.OrdinalIgnoreCase);
+
     private readonly Dictionary<string, DateTime> _nextCheckUtc = new(StringComparer.OrdinalIgnoreCase);
 
     protected ILogger Logger { get; }
@@ -85,12 +91,15 @@ public abstract class PollingMonitorBase : BackgroundService
     {
         _lastAlertUtc.Remove(ruleKey);
         _unhealthyRules.Remove(ruleKey);
+        _alertedRules.Remove(ruleKey);
         _nextCheckUtc.Remove(ruleKey);
     }
 
     /// <summary>
     /// 上报某条规则的检查结果：异常按冷却期推送；从异常恢复到健康时推送一次恢复通知。
     /// 初次启动即为健康的规则不会推送。
+    /// 恢复通知只在“本轮异常期间确实推送过告警”时发送：被去重/退避抑制、从未告警过的
+    /// 短暂异常不打扰运维，但状态仍然记录，避免抑制分支把恢复通知吞掉。
     /// </summary>
     /// <param name="cooldown">该规则的告警冷却时间；不传则用监控器默认值。</param>
     protected async Task ReportAsync(string ruleKey, MonitorResult result, CancellationToken ct, TimeSpan? cooldown = null)
@@ -103,7 +112,9 @@ public abstract class PollingMonitorBase : BackgroundService
             Logger.LogDebug("[{Monitor}] {Rule}: {Message}", MonitorName, ruleKey, result.Message);
             _lastAlertUtc.Remove(ruleKey);
 
-            if (!_unhealthyRules.Remove(ruleKey) || !result.Notify)
+            var wasUnhealthy = _unhealthyRules.Remove(ruleKey);
+            var wasAlerted = _alertedRules.Remove(ruleKey);
+            if (!wasUnhealthy || !wasAlerted || !result.Notify)
                 return;
 
             Logger.LogInformation("[{Monitor}] {Rule}: 已恢复正常。{Message}", MonitorName, ruleKey, result.Message);
@@ -118,10 +129,12 @@ public abstract class PollingMonitorBase : BackgroundService
 
         Logger.LogWarning("[{Monitor}] {Rule}: {Message}", MonitorName, ruleKey, result.Message);
 
+        // 先记状态，再看是否推送：否则 Notify=false 的分支会让后续恢复无处可比。
+        _unhealthyRules.Add(ruleKey);
+
         if (!result.Notify)
             return;
 
-        _unhealthyRules.Add(ruleKey);
         var now = DateTime.UtcNow;
         if (_lastAlertUtc.TryGetValue(ruleKey, out var last) && now - last < alertCooldown)
         {
@@ -130,6 +143,7 @@ public abstract class PollingMonitorBase : BackgroundService
         }
 
         _lastAlertUtc[ruleKey] = now;
+        _alertedRules.Add(ruleKey);
         await _notifier.SendAsync(new AlertMessage
         {
             Title = $"{MonitorName} / {ruleKey}",
