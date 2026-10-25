@@ -36,8 +36,6 @@ public abstract class PollingMonitorBase : BackgroundService
             try
             {
                 await CheckAllAsync(stoppingToken);
-                if (!await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
-                    break;
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -46,6 +44,18 @@ public abstract class PollingMonitorBase : BackgroundService
             catch (Exception ex)
             {
                 Logger.LogError(ex, "[{Monitor}] 检查循环发生未处理异常", MonitorName);
+            }
+
+            // 等待必须在本轮检查之外：若和 CheckAllAsync 放在同一个 try 里，检查抛异常会跳过等待，
+            // while 立即重跑形成忙等（CPU 打满 + 日志刷屏）。
+            try
+            {
+                if (!await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
+                    break;
+            }
+            catch (OperationCanceledException)
+            {
+                break;
             }
         }
 
