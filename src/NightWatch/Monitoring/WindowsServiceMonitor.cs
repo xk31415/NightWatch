@@ -44,7 +44,7 @@ public class WindowsServiceMonitor : PollingMonitorBase
             if (status == ServiceControllerStatus.Running)
                 return MonitorResult.Healthy($"服务 {rule.ServiceName} 运行中");
 
-            if (rule.AutoRestart && status is ServiceControllerStatus.Stopped or ServiceControllerStatus.Paused)
+            if (CanAttemptRestart(rule, status))
             {
                 Logger.LogInformation("尝试启动服务 {Service}（当前状态 {Status}）", rule.ServiceName, status);
                 if (status == ServiceControllerStatus.Paused)
@@ -54,6 +54,9 @@ public class WindowsServiceMonitor : PollingMonitorBase
                 sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(30));
                 return MonitorResult.Unhealthy($"服务 {rule.ServiceName} 曾处于 {status}，已自动启动");
             }
+
+            if (rule.AutoRestart && status is ServiceControllerStatus.Stopped or ServiceControllerStatus.Paused)
+                return MonitorResult.Unhealthy($"服务 {rule.ServiceName} 处于 {status}（安全自检已禁用自动拉起，仅告警）");
 
             return MonitorResult.Unhealthy($"服务 {rule.ServiceName} 状态异常: {status}（AutoRestart=false 或状态不支持自动启动）");
         }
@@ -66,4 +69,13 @@ public class WindowsServiceMonitor : PollingMonitorBase
             return MonitorResult.Unhealthy($"检查服务 {rule.ServiceName} 失败: {ex.Message}");
         }
     }
+
+    /// <summary>
+    /// 与进程守护、文件心跳相同：AutoRestart 之外还要过 AllowLaunch。
+    /// 安全自检关闭拉起时只告警，不调用 ServiceController.Start / Continue。
+    /// </summary>
+    internal static bool CanAttemptRestart(ServiceRule rule, ServiceControllerStatus status) =>
+        rule.AutoRestart
+        && rule.AllowLaunch
+        && status is ServiceControllerStatus.Stopped or ServiceControllerStatus.Paused;
 }
