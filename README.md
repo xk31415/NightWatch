@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Windows 看门狗服务。以 LocalSystem 运行时，可监控进程、Windows 服务、日志文件、系统资源和心跳，异常时告警，并可按配置自动拉起目标。
+跨平台看门狗服务（Windows / Linux）。以 Windows LocalSystem 或 Linux root 运行时，可监控进程、系统服务（Windows 服务 / systemd unit）、日志文件、系统资源和心跳，异常时告警，并可按配置自动拉起目标。
 
 通知支持企业微信、钉钉（加签）和 SMTP 邮件，可同时启用；告警按规则冷却，恢复时推送一次通知。告警标题前缀为「守夜人」。
 
@@ -22,6 +22,8 @@ Windows 看门狗服务。以 LocalSystem 运行时，可监控进程、Windows 
 
 ## 环境要求
 
+### Windows
+
 - Windows 10 / Windows Server 2016 或更新
 - 框架依赖发布：目标机安装 [.NET 10 运行时](https://dotnet.microsoft.com/download)（含 ASP.NET Core）
 - 自包含发布：目标机不必装运行时，体积更大
@@ -29,12 +31,21 @@ Windows 看门狗服务。以 LocalSystem 运行时，可监控进程、Windows 
 - 建议安装到非系统盘，例如 `D:\NightWatch`
 - 配置里的路径一律用**绝对路径**。服务工作目录是 `C:\Windows\System32`，相对路径会指错位置
 
+### Linux
+
+- 主流发行版（systemd 系：Ubuntu 20.04+、Debian 11+、CentOS/RHEL 8+ 等）
+- 框架依赖发布：目标机安装 [.NET 10 运行时](https://dotnet.microsoft.com/download)（含 ASP.NET Core）
+- 注册 systemd unit、自动启动其他服务：root 权限
+- 建议安装到 `/opt/nightwatch`
+- 配置里的路径一律用**绝对路径**（如 `/opt/myapp/myapp`、`/var/log/myapp`）
+- 服务守护的 `ServiceName` 填 **systemd unit 名**（如 `nginx`、`myapp.service`）
+
 ## 功能
 
 | 模块 | 监控内容 | 异常动作 |
 |------|----------|----------|
 | 进程守护 | 进程是否存活、窗口是否无响应 | 告警；配置了可执行路径则可拉起 / 强杀重启 |
-| 服务守护 | Windows 服务是否停止或暂停 | 告警；`AutoRestart` 与 `AllowLaunch` 都为 true 时启动或继续 |
+| 服务守护 | Windows 服务 / systemd unit 是否停止 | 告警；`AutoRestart` 与 `AllowLaunch` 都为 true 时启动或继续 |
 | 文件监控 | 日志停更、文件过大 | 告警 |
 | 文件心跳 | 心跳文件超过阈值未更新 | 告警；配置了可执行路径则可结束旧进程并拉起 |
 | HTTP 心跳 | 多产品、多用户上报超时 | 告警 |
@@ -68,7 +79,7 @@ flowchart TB
   PM --> COORD[拉起去重]
   FH --> COORD
   COORD --> EXE[目标进程]
-  SM --> SVC[Windows 服务]
+  SM --> SVC[Windows 服务 / systemd unit]
 
   PM --> N[多通道通知]
   SM --> N
@@ -85,7 +96,7 @@ flowchart TB
 
 ## 部署
 
-以下命令在**管理员**命令提示符或 PowerShell 中执行。把 `D:\NightWatch` 换成实际安装目录。
+以下命令在**管理员**命令提示符或 PowerShell 中执行。把 `D:\NightWatch` 换成实际安装目录。Linux 部署见下方 [Linux 部署](#linux-部署)。
 
 ### 发布
 
@@ -218,6 +229,121 @@ sc delete NightWatch
 reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v WatchDog__EnableStartupSecurityCheck /f
 ```
 
+### Linux 部署
+
+以下命令以 root 执行。把 `/opt/nightwatch` 换成实际安装目录。
+
+#### 发布（Linux）
+
+开发机或 CI 上：
+
+```bash
+dotnet publish src/NightWatch -c Release -r linux-x64 --self-contained false -o /opt/nightwatch
+```
+
+自包含（目标机不装运行时）：
+
+```bash
+dotnet publish src/NightWatch -c Release -r linux-x64 --self-contained true -o /opt/nightwatch
+```
+
+也可从 GitHub Actions 的 `NightWatch-linux-x64` 制品下载后解压到安装目录。
+
+#### 编写配置（Linux）
+
+```bash
+cp /opt/nightwatch/appsettings.example.json /opt/nightwatch/appsettings.json
+vi /opt/nightwatch/appsettings.json
+```
+
+与 Windows 的差异：
+- 所有路径写 Linux 绝对路径（`/opt/myapp/myapp`、`/var/log/myapp`）
+- `Resources.Disks[].Drive` 填挂载点（`/`、`/data`），不是盘符
+- `Services[].ServiceName` 填 systemd unit 名（`nginx` 或 `myapp.service`）
+- 通知、心跳、文件监控等配置与 Windows 完全一致
+
+#### 收紧目录权限（Linux）
+
+安装目录、被守护程序目录、心跳文件目录都不要对普通用户开放写权限：
+
+```bash
+chown -R root:root /opt/nightwatch /opt/myapp /var/lib/myapp
+chmod -R go-w /opt/nightwatch /opt/myapp /var/lib/myapp
+```
+
+自检只拦截「其他用户可写」和「普通用户属主」。自定义属组可写（`chgrp deployers` + `g+w`）不会被禁用拉起。
+
+#### 开启安全自检（Linux）
+
+```bash
+systemctl set-environment WatchDog__EnableStartupSecurityCheck=true
+```
+
+规则与 Windows 相同：**关闭权只认环境变量或命令行**，不要写在 `appsettings.json` 里。自检开启后用权限位与属主 uid 检查：其他用户可写、属主是普通登录用户（uid ≥ 1000）、或权限读失败时，**只关闭自动拉起**，监控和告警继续。开发环境（`dotnet run`）不检查安装目录和配置文件。
+
+#### 注册 systemd 服务
+
+写 unit 文件 `/etc/systemd/system/nightwatch.service`：
+
+```ini
+[Unit]
+Description=NightWatch 看门狗服务
+After=network.target
+
+[Service]
+Type=notify
+WorkingDirectory=/opt/nightwatch
+ExecStart=/opt/nightwatch/NightWatch
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+框架依赖发布时 `ExecStart` 也可写成 `ExecStart=/usr/bin/dotnet /opt/nightwatch/NightWatch.dll`。
+
+```bash
+systemctl daemon-reload
+systemctl enable --now nightwatch
+systemctl status nightwatch
+```
+
+`Type=notify` 与 `AddSystemd` 配合，进程就绪后才报告启动完成。
+
+#### 确认运行（Linux）
+
+```bash
+systemctl status nightwatch
+ls /opt/nightwatch/logs
+```
+
+日志在安装目录 `logs/nightwatch-*.log`，按天滚动，保留 30 天。
+
+#### 更新（Linux）
+
+保留现有 `appsettings.json` 和 `logs`，只替换程序文件：
+
+```bash
+systemctl stop nightwatch
+dotnet publish src/NightWatch -c Release -r linux-x64 --self-contained false -o /opt/nightwatch
+systemctl start nightwatch
+```
+
+#### 卸载（Linux）
+
+```bash
+systemctl disable --now nightwatch
+rm /etc/systemd/system/nightwatch.service
+systemctl daemon-reload
+```
+
+再按需删除 `/opt/nightwatch`。环境变量可保留，或：
+
+```bash
+systemctl unset-environment WatchDog__EnableStartupSecurityCheck
+```
+
 ## 配置说明
 
 全部选项在 `appsettings.json` 的 `WatchDog` 节。不需要的数组留空或不写，对应监控器不会启动。
@@ -226,7 +352,7 @@ reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /
 |----|------|----------|
 | `Notify.Channels` | 通知通道，可叠加 | `Type`：`wecom` / `dingtalk` / `email` |
 | `Processes` | 进程守护 | `Name`、`ProcessName`、`FilePath`（空则只告警）、`Arguments`、`WorkingDirectory`、`RestartIfNotResponding` |
-| `Services` | 服务守护 | `Name`、`ServiceName`（`sc query` 的服务名，不是显示名）、`AutoRestart`、`AllowLaunch` |
+| `Services` | 服务守护 | `Name`、`ServiceName`（Windows 为 `sc query` 的服务名；Linux 为 systemd unit 名）、`AutoRestart`、`AllowLaunch` |
 | `Files` | 文件 / 日志 | `Name`、`Path`、`Pattern`、`StaleMinutes`（0 关闭）、`MaxSizeMB`（0 关闭） |
 | `FileHeartbeats` | 文件心跳 | `Name`、`HeartbeatFile`、`StaleMinutes`、可选 `ProcessName` / `FilePath` |
 | `HttpHeartbeat` | HTTP 心跳 | 见下文 |
@@ -359,7 +485,7 @@ reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /
 ]
 ```
 
-`ServiceName` 必须是 `sc query` 里的服务名。暂停状态会执行继续，停止状态会执行启动。`AllowLaunch` 默认 true，旧配置不写该字段时行为不变。安全自检判定安装目录或配置不可信时会把它设为 false，此时只告警、不启动服务（与进程守护、文件心跳同一道闸门）。也可以在配置里显式写 `"AllowLaunch": false`。
+`ServiceName` 在 Windows 上必须是 `sc query` 里的服务名（不是显示名），在 Linux 上填 systemd unit 名（`nginx` 或 `myapp.service`）。Windows 上暂停状态会执行继续，停止状态会执行启动；Linux 上 systemd 无暂停态，停止/失败即拉起。`AllowLaunch` 默认 true，旧配置不写该字段时行为不变。安全自检判定安装目录或配置不可信时会把它设为 false，此时只告警、不启动服务（与进程守护、文件心跳同一道闸门）。也可以在配置里显式写 `"AllowLaunch": false`。
 
 ### 文件监控
 
@@ -469,18 +595,18 @@ netsh advfirewall firewall add rule name="NightWatch HTTP" dir=in action=allow p
 }
 ```
 
-阈值为 `0` 的项不检查。未配置任何磁盘且 CPU/内存都为 0 时，资源监控器不启动。
+阈值为 `0` 的项不检查。未配置任何磁盘且 CPU/内存都为 0 时，资源监控器不启动。`Disks[].Drive` 在 Windows 写盘符（`C:`），Linux 写挂载点（`/`、`/data`）。CPU/内存采集：Windows 用性能计数器与 `GlobalMemoryStatusEx`，Linux 读 `/proc/stat` 与 `/proc/meminfo`。
 
 ## 运维
 
-| 操作 | 命令 |
-|------|------|
-| 启动 | `sc start NightWatch` |
-| 停止 | `sc stop NightWatch` |
-| 状态 | `sc query NightWatch` |
-| 前台调试 | 先 `sc stop NightWatch`，再在安装目录运行 `NightWatch.exe` |
-| 看日志 | `D:\NightWatch\logs\nightwatch-*.log` |
-| 改配置 | 编辑 `appsettings.json` 后 `sc stop` / `sc start` |
+| 操作 | Windows | Linux |
+|------|---------|-------|
+| 启动 | `sc start NightWatch` | `systemctl start nightwatch` |
+| 停止 | `sc stop NightWatch` | `systemctl stop nightwatch` |
+| 状态 | `sc query NightWatch` | `systemctl status nightwatch` |
+| 前台调试 | 先 `sc stop NightWatch`，再在安装目录运行 `NightWatch.exe` | 先 `systemctl stop nightwatch`，再在安装目录运行 `./NightWatch` |
+| 看日志 | `D:\NightWatch\logs\nightwatch-*.log` | `/opt/nightwatch/logs/nightwatch-*.log` |
+| 改配置 | 编辑 `appsettings.json` 后 `sc stop` / `sc start` | 编辑 `appsettings.json` 后 `systemctl restart nightwatch` |
 
 改系统环境变量后必须重启服务。日志级别为 Information。每条规则的异常，以及从异常恢复，会写入文件；持续健康的轮询结果是 Debug，避免正常运行时刷屏。
 
@@ -488,25 +614,25 @@ netsh advfirewall firewall add rule name="NightWatch HTTP" dir=in action=allow p
 
 ## 常见问题
 
-**服务无法启动，或启动后立刻退出。** 先在安装目录前台运行 `NightWatch.exe` 看报错。常见原因：未安装 .NET 10 运行时、`appsettings.json` 不是合法 JSON。
+**服务无法启动，或启动后立刻退出。** 先在安装目录前台运行（Windows: `NightWatch.exe`；Linux: `./NightWatch`）看报错。常见原因：未安装 .NET 10 运行时、`appsettings.json` 不是合法 JSON。
 
 **HTTP 心跳接口端口被占用。** 日志出现「HTTP 心跳服务启动失败…接收端已降级关闭」。看门狗本身继续运行，其余监控不受影响，只是收不到 HTTP 心跳上报；释放端口后重启服务。
 
-**日志目录写不出来。** 安装目录对 SYSTEM 没有写权限。按「收紧目录权限」给 SYSTEM 完全控制。
+**日志目录写不出来。** 安装目录对服务账户（Windows: SYSTEM；Linux: root）没有写权限。按「收紧目录权限」授权。
 
-**进程明明在跑，看门狗还在拉起。** 存活按映像完整路径匹配。`FilePath` 必须与进程主模块路径一致（含盘符）。
+**进程明明在跑，看门狗还在拉起。** 存活按映像完整路径匹配。`FilePath` 必须与进程主模块路径完全一致（Windows 含盘符、大小写不敏感；Linux 大小写敏感）。
 
-**配置了拉起却没有启动目标。** 日志里若有 `[安全自检]`，说明路径对宽泛组可写，拉起已被关闭。收紧 ACL 后重启服务。`FilePath` 为空的规则本来就不会拉起。
+**配置了拉起却没有启动目标。** 日志里若有 `[安全自检]`，说明路径对宽泛组可写或属主不可信，拉起已被关闭。收紧权限后重启服务。`FilePath` 为空的规则本来就不会拉起。
 
-**找不到目标文件或心跳文件。** 服务工作目录是 `System32`。所有路径写成 `D:\...`。
+**找不到目标文件或心跳文件。** 服务工作目录不是安装目录（Windows 是 `System32`，Linux 由 unit 的 `WorkingDirectory` 决定）。所有路径写成绝对路径。
 
 **HTTP 上报返回 401。** 请求未带 Token，或 Token 与配置不一致（长度不同同样返回 401，不会变成 500）。
 
-**跨机器心跳连不上。** `Host` 是否为 `0.0.0.0`、本机防火墙是否放行端口、对端能否访问该端口。
+**跨机器心跳连不上。** `Host` 是否为 `0.0.0.0`、本机防火墙是否放行端口、对端能否访问该端口（Linux 放行示例：`firewall-cmd --add-port=5200/tcp --permanent` 或 `ufw allow 5200/tcp`）。
 
 **邮件收不到。** 确认授权码、端口与 `UseSsl` 组合，以及出站 587/465 是否被拦。可用 `--test-notify` 单独测通道。
 
-**服务名找不到。** `ServiceName` 要用 `sc query` 的内部名，不是服务管理器里的显示名。
+**服务名找不到。** Windows 上 `ServiceName` 要用 `sc query` 的内部名，不是服务管理器里的显示名；Linux 上要用 `systemctl list-units` 里的 unit 名。
 
 ## 项目结构
 
@@ -517,10 +643,22 @@ src/
 │   ├── appsettings.example.json       # 配置模板（复制为 appsettings.json）
 │   ├── Models/
 │   │   └── WatchDogOptions.cs         # 配置模型
+│   ├── Platform/                      # 跨平台抽象（Windows / Linux 实现）
+│   │   ├── PlatformServices.cs        # 按 OS 选择实现、路径比较规则
+│   │   ├── IServiceControl.cs         # 服务单元控制接口
+│   │   ├── ServiceUnitStatus.cs       # 统一服务状态枚举
+│   │   ├── WindowsServiceControl.cs   # Windows 服务（ServiceController）
+│   │   ├── SystemdServiceControl.cs   # systemd unit（systemctl）
+│   │   ├── ISystemMetrics.cs          # 资源采集接口
+│   │   ├── WindowsSystemMetrics.cs    # 性能计数器 / GlobalMemoryStatusEx
+│   │   ├── LinuxSystemMetrics.cs      # /proc/stat、/proc/meminfo
+│   │   ├── IPermissionAuditor.cs      # 权限审计接口
+│   │   ├── WindowsAclAuditor.cs       # SID / ACL 判定
+│   │   └── LinuxPermissionAuditor.cs  # 属主 uid + 权限位判定
 │   ├── Security/
 │   │   ├── SecuritySwitch.cs          # 自检开关（环境变量 / 命令行）
-│   │   ├── StartupSecurityCheck.cs    # 启动 ACL 自检
-│   │   ├── AclEvaluator.cs            # SID / Allow-Deny / 所有者判定
+│   │   ├── StartupSecurityCheck.cs    # 启动权限自检
+│   │   ├── AclEvaluator.cs            # Windows SID / Allow-Deny / 所有者判定
 │   │   └── RuleNameGuard.cs           # 规则 Name 非空且唯一
 │   ├── Heartbeat/
 │   │   ├── HeartbeatRegistry.cs       # HTTP 心跳注册表
@@ -533,7 +671,7 @@ src/
 │   │   ├── RestartBackoff.cs          # 进程 / 文件心跳共用的拉起退避
 │   │   ├── ProcessImage.cs            # 按映像路径识别 / 结束进程
 │   │   ├── ProcessMonitor.cs          # 进程守护
-│   │   ├── WindowsServiceMonitor.cs   # Windows 服务守护
+│   │   ├── ServiceMonitor.cs          # 服务守护（Windows 服务 / systemd unit）
 │   │   ├── FileLogMonitor.cs          # 文件 / 日志
 │   │   └── ResourceMonitor.cs         # CPU / 内存 / 磁盘
 │   └── Notification/
@@ -541,7 +679,7 @@ src/
 │       ├── MultiChannelNotifier.cs    # 多通道并行分发
 │       ├── ChannelSenders.cs          # 企业微信 / 钉钉
 │       └── EmailSender.cs             # SMTP 邮件
-└── NightWatch.Tests/                  # 单测（ACL、开关、errcode、规则名、心跳鉴权、拉起去重、心跳超时）
+└── NightWatch.Tests/                  # 单测（ACL、权限位、/proc 解析、开关、心跳鉴权、拉起去重等）
 ```
 
 ## 开发
@@ -551,9 +689,11 @@ dotnet run --project src\NightWatch
 dotnet test src\NightWatch.Tests
 ```
 
-`Properties/launchSettings.json` 会把环境设为 Development，此时不检查安装目录和配置文件的 ACL。
+Linux / macOS 上同样的命令（开发主要在 Windows 进行，但代码可在任意平台编译测试）。
 
-新增监控类型：在 `WatchDogOptions` 增加规则 → 继承 `PollingMonitorBase` 并实现 `CheckAllAsync` → 用 `ReportAsync` 上报 → 在 `Program.cs` 按条件 `AddHostedService`。
+`Properties/launchSettings.json` 会把环境设为 Development，此时不检查安装目录和配置文件的权限。
+
+新增监控类型：在 `WatchDogOptions` 增加规则 → 继承 `PollingMonitorBase` 并实现 `CheckAllAsync` → 用 `ReportAsync` 上报 → 在 `Program.cs` 按条件 `AddHostedService`。涉及平台差异时在 `Platform/` 下加接口与双实现，不要直接在监控器里调 Windows/Linux API。
 
 ## 开源协议
 

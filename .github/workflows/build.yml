@@ -8,7 +8,7 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  build:
+  build-windows:
     name: Build (Release, win-x64)
     runs-on: windows-latest
 
@@ -47,5 +47,45 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: NightWatch-win-x64
+          path: publish/
+          retention-days: 14
+
+  build-linux:
+    name: Build (Release, linux-x64)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: |
+          dotnet restore src/NightWatch/NightWatch.csproj
+          dotnet restore src/NightWatch.Tests/NightWatch.Tests.csproj
+
+      - name: Build (Release)
+        run: dotnet build src/NightWatch/NightWatch.csproj -c Release --no-restore
+
+      # Linux 上运行同一套测试：Windows-only 用例（ACL/SID）自动跳过，/proc 解析与权限位用例在此执行。
+      - name: Test
+        run: dotnet test src/NightWatch.Tests/NightWatch.Tests.csproj -c Release
+
+      - name: Publish (linux-x64, framework-dependent)
+        run: dotnet publish src/NightWatch/NightWatch.csproj -c Release -r linux-x64 --self-contained false -o publish
+
+      - name: Verify build output
+        run: |
+          test -f publish/NightWatch || { echo "NightWatch 可执行文件未生成"; exit 1; }
+          ls -la publish
+
+      - name: Upload publish artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NightWatch-linux-x64
           path: publish/
           retention-days: 14
