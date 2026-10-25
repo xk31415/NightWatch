@@ -226,7 +226,7 @@ reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /
 | `HttpHeartbeat` | HTTP 心跳 | 见下文 |
 | `Resources` | 资源 | `CpuPercent`、`MemoryPercent`（0 关闭）、`Disks` |
 
-监控项通用字段：`IntervalSeconds`（最短 5 秒）、`CooldownMinutes`。每条规则按自己的间隔检查。存活判定和结束进程优先匹配可执行文件完整路径，不用同名进程冒充。
+监控项通用字段：`IntervalSeconds`（最短 5 秒）、`CooldownMinutes`。每条规则按自己的间隔检查。存活判定和结束进程以可执行文件完整路径为准，不用同名进程冒充；配置了 `FilePath` 时会按可执行文件名自动枚举，因此 `ProcessName` 与实际文件名不一致也不会漏判。
 
 ### 通知通道
 
@@ -278,7 +278,7 @@ reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /
 ]
 ```
 
-`FilePath` 为空则只告警不拉起。`RestartIfNotResponding` 仅对有窗口的进程有效。
+`FilePath` 为空则只告警不拉起。`RestartIfNotResponding` 仅对有窗口的进程有效。强杀重启同样受 `AllowLaunch` 与退避熔断约束：安全自检禁用拉起、或连续拉起已达上限时只告警、不结束进程，避免把目标留在「已死且不会拉起」的状态。`WorkingDirectory` 留空（或不写）时，子进程工作目录为可执行文件所在目录。
 
 ### 服务守护
 
@@ -384,6 +384,8 @@ netsh advfirewall firewall add rule name="NightWatch HTTP" dir=in action=allow p
 
 动态键超过 `RetentionMinutes` 未上报会移除；仍在 `Expected` 中的键按「必达缺失」继续告警。
 
+端口被占用（或绑定失败）时，接收端会降级关闭并在日志记一条 `ERR`，进程/服务/资源监控仍继续运行，只是收不到 HTTP 上报；排查端口占用后重启服务即可恢复。
+
 ### 资源监控
 
 ```jsonc
@@ -415,7 +417,9 @@ netsh advfirewall firewall add rule name="NightWatch HTTP" dir=in action=allow p
 
 ## 常见问题
 
-**服务无法启动，或启动后立刻退出。** 先在安装目录前台运行 `NightWatch.exe` 看报错。常见原因：未安装 .NET 10 运行时、`appsettings.json` 不是合法 JSON、HTTP 端口被占用。
+**服务无法启动，或启动后立刻退出。** 先在安装目录前台运行 `NightWatch.exe` 看报错。常见原因：未安装 .NET 10 运行时、`appsettings.json` 不是合法 JSON。
+
+**HTTP 心跳接口端口被占用。** 日志出现「HTTP 心跳服务启动失败…接收端已降级关闭」。看门狗本身继续运行，其余监控不受影响，只是收不到 HTTP 心跳上报；释放端口后重启服务。
 
 **日志目录写不出来。** 安装目录对 SYSTEM 没有写权限。按「收紧目录权限」给 SYSTEM 完全控制。
 
