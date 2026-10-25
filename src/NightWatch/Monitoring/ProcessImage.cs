@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using NightWatch.Platform;
 
 namespace NightWatch.Monitoring;
 
@@ -9,13 +10,14 @@ public static class ProcessImage
     {
         if (string.IsNullOrWhiteSpace(a) || string.IsNullOrWhiteSpace(b))
             return false;
+        var comparison = PlatformServices.PathComparison;
         try
         {
-            return string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
+            return string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), comparison);
         }
         catch
         {
-            return string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+            return string.Equals(a, b, comparison);
         }
     }
 

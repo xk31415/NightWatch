@@ -1,24 +1,26 @@
 using NightWatch.Notification;
-using System.Diagnostics;
-using System.Runtime.InteropServices;
+using NightWatch.Platform;
 using NightWatch.Models;
 
 namespace NightWatch.Monitoring;
 
 /// <summary>
 /// 系统资源监控器：CPU 使用率、内存使用率、磁盘剩余空间阈值告警。
+/// CPU/内存采集走 <see cref="ISystemMetrics"/>（Windows: 计数器/GlobalMemoryStatusEx；Linux: /proc）。
 /// </summary>
 public class ResourceMonitor : PollingMonitorBase
 {
     private readonly ResourceRule _rule;
     private readonly ScheduleRule? _defaultSchedule;
-    private PerformanceCounter? _cpuCounter;
+    private readonly ISystemMetrics _metrics;
 
-    public ResourceMonitor(WatchDogOptions options, IEventNotifier notifier, ILogger<ResourceMonitor> logger)
+    public ResourceMonitor(WatchDogOptions options, IEventNotifier notifier, ISystemMetrics metrics,
+        ILogger<ResourceMonitor> logger)
         : base(notifier, logger)
     {
         _rule = options.Resources;
         _defaultSchedule = options.Schedule;
+        _metrics = metrics;
     }
 
     protected override string MonitorName => "资源监控";
@@ -33,7 +35,7 @@ public class ResourceMonitor : PollingMonitorBase
 
         if (_rule.CpuPercent > 0)
         {
-            var cpu = await GetCpuPercentAsync(ct);
+            var cpu = await _metrics.GetCpuPercentAsync(ct);
             if (cpu is not null)
             {
                 if (cpu > _rule.CpuPercent)
@@ -45,7 +47,7 @@ public class ResourceMonitor : PollingMonitorBase
 
         if (_rule.MemoryPercent > 0)
         {
-            var mem = GetMemoryUsedPercent();
+            var mem = _metrics.GetMemoryUsedPercent();
             if (mem > _rule.MemoryPercent)
                 problems.Add($"内存使用率 {mem:F1}% 超过阈值 {_rule.MemoryPercent}%");
             else
@@ -79,53 +81,9 @@ public class ResourceMonitor : PollingMonitorBase
         await ReportAsync(key, result, ct, Minutes(_rule.CooldownMinutes), suppress);
     }
 
-    /// <summary>取整机 CPU 使用率。PerformanceCounter 首次调用无数据，跳过返回 null。</summary>
-    private async Task<double?> GetCpuPercentAsync(CancellationToken ct)
-    {
-        try
-        {
-            _cpuCounter ??= new PerformanceCounter("Processor", "% Processor Time", "_Total", readOnly: true);
-            _cpuCounter.NextValue(); // 首次调用返回 0，丢弃
-            await Task.Delay(500, ct);
-            var v = _cpuCounter.NextValue();
-            return v < 0 ? null : v;
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "读取 CPU 计数器失败");
-            return null;
-        }
-    }
-
     public override void Dispose()
     {
-        _cpuCounter?.Dispose();
+        _metrics.Dispose();
         base.Dispose();
     }
-
-    private static double GetMemoryUsedPercent()
-    {
-        var ms = new MEMORY_STATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORY_STATUSEX>() };
-        if (!GlobalMemoryStatusEx(ref ms))
-            return 0;
-        return 100.0 * (ms.ullTotalPhys - ms.ullAvailPhys) / ms.ullTotalPhys;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct MEMORY_STATUSEX
-    {
-        public uint dwLength;
-        public uint dwMemoryLoad;
-        public ulong ullTotalPhys;
-        public ulong ullAvailPhys;
-        public ulong ullTotalPageFile;
-        public ulong ullAvailPageFile;
-        public ulong ullTotalVirtual;
-        public ulong ullAvailVirtual;
-        public ulong ullAvailExtendedVirtual;
-    }
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GlobalMemoryStatusEx(ref MEMORY_STATUSEX lpBuffer);
 }

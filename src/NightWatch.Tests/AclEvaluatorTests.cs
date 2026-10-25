@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using NightWatch.Security;
@@ -5,6 +6,7 @@ using Xunit;
 
 namespace NightWatch.Tests;
 
+[SupportedOSPlatform("windows")]
 public class AclEvaluatorTests
 {
     private static readonly SecurityIdentifier Users = new(WellKnownSidType.BuiltinUsersSid, null);
@@ -14,7 +16,7 @@ public class AclEvaluatorTests
     private static readonly SecurityIdentifier System = new(WellKnownSidType.LocalSystemSid, null);
     private static readonly SecurityIdentifier Admins = new(WellKnownSidType.BuiltinAdministratorsSid, null);
 
-    [Fact]
+    [WindowsFact]
     public void SidNames_DoNotInclude_ConsoleLogonSid()
     {
         var names = Enum.GetNames<WellKnownSidType>();
@@ -23,7 +25,7 @@ public class AclEvaluatorTests
         Assert.Contains("InteractiveSid", names);
     }
 
-    [Fact]
+    [WindowsFact]
     public void ReadAndExecute_IsNotWritable()
     {
         var acl = NewAcl();
@@ -31,7 +33,7 @@ public class AclEvaluatorTests
         Assert.False(AclEvaluator.HasBroadAceWrite(acl));
     }
 
-    [Fact]
+    [WindowsFact]
     public void Modify_IsWritable()
     {
         var acl = NewAcl();
@@ -39,7 +41,7 @@ public class AclEvaluatorTests
         Assert.True(AclEvaluator.HasBroadAceWrite(acl));
     }
 
-    [Fact]
+    [WindowsFact]
     public void Interactive_Modify_IsWritable()
     {
         var acl = NewAcl();
@@ -47,7 +49,7 @@ public class AclEvaluatorTests
         Assert.True(AclEvaluator.HasBroadAceWrite(acl));
     }
 
-    [Fact]
+    [WindowsFact]
     public void ConsoleLogon_Modify_IsWritable()
     {
         var acl = NewAcl();
@@ -55,7 +57,7 @@ public class AclEvaluatorTests
         Assert.True(AclEvaluator.HasBroadAceWrite(acl));
     }
 
-    [Fact]
+    [WindowsFact]
     public void DenyWriteData_Plus_AllowFullControl_StillWritable()
     {
         var acl = NewAcl();
@@ -64,7 +66,7 @@ public class AclEvaluatorTests
         Assert.True(AclEvaluator.HasBroadAceWrite(acl));
     }
 
-    [Fact]
+    [WindowsFact]
     public void DenyFullControl_Plus_AllowWrite_IsNotWritable()
     {
         var acl = NewAcl();
@@ -73,7 +75,7 @@ public class AclEvaluatorTests
         Assert.False(AclEvaluator.HasBroadAceWrite(acl));
     }
 
-    [Fact]
+    [WindowsFact]
     public void PerSid_DenyDoesNotCancel_OtherGroupAllow()
     {
         var acl = NewAcl();
@@ -82,7 +84,7 @@ public class AclEvaluatorTests
         Assert.True(AclEvaluator.HasBroadAceWrite(acl));
     }
 
-    [Fact]
+    [WindowsFact]
     public void SystemOwner_IsPrivileged()
     {
         Assert.False(AclEvaluator.IsUnprivilegedOwner(System));
@@ -90,7 +92,7 @@ public class AclEvaluatorTests
         Assert.True(AclEvaluator.IsUnprivilegedOwner(Users));
     }
 
-    [Fact]
+    [WindowsFact]
     public void UnprivilegedOwner_MakesObjectWritable()
     {
         var acl = NewAcl();
@@ -104,7 +106,7 @@ public class AclEvaluatorTests
     /// 它不在 WellKnownSidType 里，修复前会被判成“非特权”，导致 cmd.exe / powershell.exe
     /// 以及加固过的安装目录被误报为不可信，自动拉起被静默禁用。
     /// </summary>
-    [Fact]
+    [WindowsFact]
     public void TrustedInstallerOwner_IsPrivileged()
     {
         var trustedInstaller = new SecurityIdentifier("S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464");
@@ -118,7 +120,7 @@ public class AclEvaluatorTests
         Assert.False(AclEvaluator.HasBroadUserWrite(acl));
     }
 
-    [Fact]
+    [WindowsFact]
     public void NtServiceOwner_IsPrivileged()
     {
         var serviceSid = new SecurityIdentifier("S-1-5-80-3880718306-3832830129-1677859214-2598158968-1052248003");
@@ -127,7 +129,7 @@ public class AclEvaluatorTests
         Assert.False(AclEvaluator.IsUnprivilegedOwner(serviceSid));
     }
 
-    [Fact]
+    [WindowsFact]
     public void OrdinaryUserOwner_IsStillUnprivileged()
     {
         // 普通本地用户 SID（S-1-5-21-…）：所有者可隐式 WRITE_DAC，仍必须判定为不可信。
@@ -137,7 +139,7 @@ public class AclEvaluatorTests
         Assert.True(AclEvaluator.IsUnprivilegedOwner(user));
     }
 
-    [Fact]
+    [WindowsFact]
     public void NtServiceGroupSid_IsPrivileged()
     {
         // S-1-5-80 本身是 “NT SERVICE” 组，与域 SID（S-1-5-21-…）不同族
@@ -150,7 +152,7 @@ public class AclEvaluatorTests
     /// C:\Windows\System32 及其下的 exe 被误判为不可信。
     /// 注：FileSystemAccessRule 的公开构造函数不接受泛型位（真实 ACE 由内核返回），所以直接测映射函数。
     /// </summary>
-    [Fact]
+    [WindowsFact]
     public void Normalize_GenericReadExecute_HasNoWriteBits()
     {
         var rights = AclEvaluator.Normalize(unchecked((FileSystemRights)0xA0000000));
@@ -158,7 +160,7 @@ public class AclEvaluatorTests
         Assert.Equal(0, (int)(rights & ~AclEvaluator.ReadOnlyMask));
     }
 
-    [Fact]
+    [WindowsFact]
     public void Normalize_GenericWrite_HasWriteBits()
     {
         var rights = AclEvaluator.Normalize((FileSystemRights)0x40000000);
@@ -166,13 +168,13 @@ public class AclEvaluatorTests
         Assert.NotEqual(0, (int)(rights & ~AclEvaluator.ReadOnlyMask));
     }
 
-    [Fact]
+    [WindowsFact]
     public void Normalize_GenericAll_IsFullControl()
     {
         Assert.Equal(FileSystemRights.FullControl, AclEvaluator.Normalize((FileSystemRights)0x10000000));
     }
 
-    [Fact]
+    [WindowsFact]
     public void SystemDirectoryAclShape_IsNotWritable()
     {
         // 复刻 C:\Windows\System32 / C:\Program Files 的 ACE 组合：Users 只读 + 只读继承项。

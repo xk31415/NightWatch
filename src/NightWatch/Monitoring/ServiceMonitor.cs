@@ -1,22 +1,26 @@
 using NightWatch.Notification;
-using System.ServiceProcess;
+using NightWatch.Platform;
 using NightWatch.Models;
 
 namespace NightWatch.Monitoring;
 
 /// <summary>
-/// Windows 服务监控器：目标服务停止时自动启动（需管理员权限）。
+/// 服务守护：目标服务停止时自动启动。Windows 管理 Windows 服务，Linux 管理 systemd unit，
+/// 经 <see cref="IServiceControl"/> 抽象切换（需 root / 管理员权限）。
 /// </summary>
-public class WindowsServiceMonitor : PollingMonitorBase
+public class ServiceMonitor : PollingMonitorBase
 {
     private readonly List<ServiceRule> _rules;
     private readonly ScheduleRule? _defaultSchedule;
+    private readonly IServiceControl _serviceControl;
 
-    public WindowsServiceMonitor(WatchDogOptions options, IEventNotifier notifier, ILogger<WindowsServiceMonitor> logger)
+    public ServiceMonitor(WatchDogOptions options, IEventNotifier notifier, IServiceControl serviceControl,
+        ILogger<ServiceMonitor> logger)
         : base(notifier, logger)
     {
         _rules = options.Services;
         _defaultSchedule = options.Schedule;
+        _serviceControl = serviceControl;
     }
 
     protected override string MonitorName => "服务监控";
@@ -42,31 +46,30 @@ public class WindowsServiceMonitor : PollingMonitorBase
     {
         try
         {
-            using var sc = new ServiceController(rule.ServiceName);
-            var status = sc.Status;
+            var status = _serviceControl.GetStatus(rule.ServiceName);
 
-            if (status == ServiceControllerStatus.Running)
+            if (status == ServiceUnitStatus.Running)
                 return MonitorResult.Healthy($"服务 {rule.ServiceName} 运行中");
 
             if (CanAttemptRestart(rule, status))
             {
                 Logger.LogInformation("尝试启动服务 {Service}（当前状态 {Status}）", rule.ServiceName, status);
-                if (status == ServiceControllerStatus.Paused)
-                    sc.Continue();
+                if (status == ServiceUnitStatus.Paused)
+                    _serviceControl.Continue(rule.ServiceName);
                 else
-                    sc.Start();
-                sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(30));
+                    _serviceControl.Start(rule.ServiceName);
+                _serviceControl.WaitForRunning(rule.ServiceName, TimeSpan.FromSeconds(30));
                 return MonitorResult.Unhealthy($"服务 {rule.ServiceName} 曾处于 {status}，已自动启动");
             }
 
-            if (rule.AutoRestart && status is ServiceControllerStatus.Stopped or ServiceControllerStatus.Paused)
+            if (rule.AutoRestart && status is ServiceUnitStatus.Stopped or ServiceUnitStatus.Paused)
                 return MonitorResult.Unhealthy($"服务 {rule.ServiceName} 处于 {status}（安全自检已禁用自动拉起，仅告警）");
 
             return MonitorResult.Unhealthy($"服务 {rule.ServiceName} 状态异常: {status}（AutoRestart=false 或状态不支持自动启动）");
         }
-        catch (Exception ex) when (ex is System.TimeoutException or System.ServiceProcess.TimeoutException)
+        catch (TimeoutException)
         {
-            return MonitorResult.Unhealthy($"服务 {rule.ServiceName} 在 30 秒内未进入 Running");
+            return MonitorResult.Unhealthy($"服务 {rule.ServiceName} 在 30 秒内未进入运行状态");
         }
         catch (Exception ex)
         {
@@ -76,10 +79,10 @@ public class WindowsServiceMonitor : PollingMonitorBase
 
     /// <summary>
     /// 与进程守护、文件心跳相同：AutoRestart 之外还要过 AllowLaunch。
-    /// 安全自检关闭拉起时只告警，不调用 ServiceController.Start / Continue。
+    /// 安全自检关闭拉起时只告警，不执行 Start / Continue。
     /// </summary>
-    internal static bool CanAttemptRestart(ServiceRule rule, ServiceControllerStatus status) =>
+    internal static bool CanAttemptRestart(ServiceRule rule, ServiceUnitStatus status) =>
         rule.AutoRestart
         && rule.AllowLaunch
-        && status is ServiceControllerStatus.Stopped or ServiceControllerStatus.Paused;
+        && status is ServiceUnitStatus.Stopped or ServiceUnitStatus.Paused;
 }

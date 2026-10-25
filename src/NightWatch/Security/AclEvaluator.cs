@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
 
@@ -7,6 +8,7 @@ namespace NightWatch.Security;
 /// 用 SID 判定「宽泛组是否对对象拥有只读之外的有效权限」。
 /// 按 SID 分别累计 Allow/Deny 位：effective = allow &amp; ~deny，再剥离只读掩码。
 /// </summary>
+[SupportedOSPlatform("windows")]
 public static class AclEvaluator
 {
     /// <summary>

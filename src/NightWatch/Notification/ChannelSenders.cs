@@ -39,7 +39,9 @@ internal static class MarkdownFormatter
         $"### [{NotificationConstants.Tag}] {(alert.IsWarning ? "告警通知" : "状态通知")}\n" +
         $"> **{Escape(alert.Title)}**\n\n" +
         $"{Escape(alert.Body)}\n\n" +
-        $"{status}\n" +
+        // 状态与时间之间必须空行：钉钉遵循标准 markdown（单个换行折叠为空格），
+        // 企业微信则宽松得多（单换行也断行），用空行两边才一致
+        $"{status}\n\n" +
         time;
 
     /// <summary>转义可能破坏 markdown 结构的字符，保留换行。</summary>

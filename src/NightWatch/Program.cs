@@ -6,6 +6,7 @@ using NightWatch.Heartbeat;
 using NightWatch.Monitoring;
 using NightWatch.Models;
 using NightWatch.Notification;
+using NightWatch.Platform;
 using NightWatch.Security;
 using Serilog;
 
@@ -82,8 +83,17 @@ Log.Logger = new LoggerConfiguration()
     .CreateLogger();
 builder.Logging.AddSerilog(Log.Logger);
 
-// ---- Windows 服务支持（sc 注册后开机自启） ----
-builder.Services.AddWindowsService(o => o.ServiceName = "NightWatch");
+// ---- 平台抽象：服务控制 / 资源采集 / 权限审计，按当前 OS 选实现 ----
+builder.Services.AddSingleton(PlatformServices.CreateServiceControl());
+builder.Services.AddSingleton(PlatformServices.CreateSystemMetrics());
+var permissionAuditor = PlatformServices.CreatePermissionAuditor();
+builder.Services.AddSingleton(permissionAuditor);
+
+// ---- 服务宿主：Windows 注册为服务，Linux 注册为 systemd unit ----
+if (OperatingSystem.IsWindows())
+    builder.Services.AddWindowsService(o => o.ServiceName = "NightWatch");
+else
+    builder.Services.AddSystemd();
 
 // ---- 配置绑定 ----
 var options = builder.Configuration
@@ -130,22 +140,22 @@ if (rawSwitch is null)
 
 var isDev = builder.Environment.IsDevelopment();
 var adminOverride = SecuritySwitch.ReadAdminOverride(args);
-var configUntrusted = StartupSecurityCheck.HasUntrustedConfigOrInstall(isDev);
+var configUntrusted = StartupSecurityCheck.HasUntrustedConfigOrInstall(permissionAuditor, isDev);
 var runSecurityCheck = SecuritySwitch.ShouldRunCheck(
     options.EnableStartupSecurityCheck, adminOverride, configUntrusted, out var switchReason);
 
 List<string> securityProblems = new();
 if (!runSecurityCheck)
-    Log.Information("{Reason}，跳过 ACL 检查", switchReason);
+    Log.Information("{Reason}，跳过权限检查", switchReason);
 else
 {
     Log.Information("{Reason}", switchReason);
-    securityProblems = StartupSecurityCheck.Check(options, Log.Logger, isDev);
+    securityProblems = StartupSecurityCheck.Check(options, Log.Logger, permissionAuditor, isDev);
 }
 
 if (securityProblems.Count > 0)
 {
-    // 不阻塞 host.Run()：SMTP 挂起时 SCM 会报服务启动超时
+    // 不阻塞 host.Run()：SMTP 挂起时 SCM/systemd 会报服务启动超时
     _ = Task.Run(async () =>
     {
         try
@@ -158,7 +168,7 @@ if (securityProblems.Count > 0)
             {
                 Title = "部署安全自检未通过，相关自动拉起已禁用",
                 Body = string.Join("\n", securityProblems) +
-                       "\n\n加固示例（管理员执行）:\nicacls \"<目标目录>\" /inheritance:r /grant:r \"Administrators:(OI)(CI)F\" /grant:r \"SYSTEM:(OI)(CI)F\" /grant:r \"Users:(OI)(CI)RX\"",
+                       $"\n\n加固示例（管理员执行）:\n{permissionAuditor.HardeningHint}",
                 IsWarning = true
             }, cts.Token);
         }
@@ -172,7 +182,7 @@ if (securityProblems.Count > 0)
 // ---- 按配置注册监控器（未配置的模块不启动） ----
 builder.Services.AddSingleton<ProcessLaunchCoordinator>();   // 跨监控器启动去重，防双实例
 if (options.Processes.Count > 0)   builder.Services.AddHostedService<ProcessMonitor>();
-if (options.Services.Count > 0)    builder.Services.AddHostedService<WindowsServiceMonitor>();
+if (options.Services.Count > 0)    builder.Services.AddHostedService<ServiceMonitor>();
 if (options.Files.Count > 0)       builder.Services.AddHostedService<FileLogMonitor>();
 if (options.FileHeartbeats.Count > 0) builder.Services.AddHostedService<FileHeartbeatMonitor>();
 if (options.Resources.CpuPercent > 0 || options.Resources.MemoryPercent > 0 || options.Resources.Disks.Count > 0)
