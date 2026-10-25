@@ -40,6 +40,20 @@ public class LinuxPlatformLogicTests
         Assert.ThrowsAny<Exception>(() => LinuxSystemMetrics.ParseCpuLine("bogus"));
     }
 
+    /// <summary>
+    /// 内核把 guest / guest_nice 也算进 user / nice，重复相加会让 total 偏大、CPU% 偏低。
+    /// </summary>
+    [Fact]
+    public void ParseCpuLine_ExcludesGuestFromTotal()
+    {
+        // user nice system idle iowait irq softirq steal guest guest_nice
+        var line = "cpu  100 0 50 800 50 0 0 0 30 10";
+        var (idle, total) = LinuxSystemMetrics.ParseCpuLine(line);
+
+        Assert.Equal(850, idle);   // idle + iowait
+        Assert.Equal(1000, total); // 1040 - guest 30 - guest_nice 10
+    }
+
     // ---- /proc/meminfo 解析 ----
 
     [Fact]
@@ -59,6 +73,28 @@ public class LinuxPlatformLogicTests
         Assert.Equal(8000000, map["MemAvailable"]);
         Assert.Equal(1234567, map["MemFree"]);
     }
+
+    // ---- cgroup v2 内存 ----
+
+    [Theory]
+    [InlineData("500", "1000", 50.0)]
+    [InlineData("1000", "1000", 100.0)]
+    [InlineData("2000", "1000", 100.0)] // 超过限额时夹到 100
+    public void CgroupMemory_ComputesPercent(string current, string max, double expected)
+    {
+        var actual = LinuxSystemMetrics.ComputeCgroupMemoryPercent(current, max);
+
+        Assert.NotNull(actual);
+        Assert.Equal(expected, actual.Value, 3);
+    }
+
+    [Theory]
+    [InlineData("500", "max")]
+    [InlineData("500", "")]
+    [InlineData("500", "0")]
+    [InlineData("oops", "1000")]
+    public void CgroupMemory_UnlimitedOrInvalid_ReturnsNull(string current, string max) =>
+        Assert.Null(LinuxSystemMetrics.ComputeCgroupMemoryPercent(current, max));
 
     // ---- Linux 权限判定 ----
 

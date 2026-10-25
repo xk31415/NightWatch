@@ -44,7 +44,7 @@
 
 | 模块 | 监控内容 | 异常动作 |
 |------|----------|----------|
-| 进程守护 | 进程是否存活、窗口是否无响应 | 告警；配置了可执行路径则可拉起 / 强杀重启 |
+| 进程守护 | 进程是否存活、窗口是否无响应（后者仅 Windows） | 告警；配置了可执行路径则可拉起 / 强杀重启 |
 | 服务守护 | Windows 服务 / systemd unit 是否停止 | 告警；`AutoRestart` 与 `AllowLaunch` 都为 true 时启动或继续 |
 | 文件监控 | 日志停更、文件过大 | 告警 |
 | 文件心跳 | 心跳文件超过阈值未更新 | 告警；配置了可执行路径则可结束旧进程并拉起 |
@@ -271,13 +271,24 @@ chown -R root:root /opt/nightwatch /opt/myapp /var/lib/myapp
 chmod -R go-w /opt/nightwatch /opt/myapp /var/lib/myapp
 ```
 
-自检只拦截「其他用户可写」和「普通用户属主」。自定义属组可写（`chgrp deployers` + `g+w`）不会被禁用拉起。
+自检只拦截「other 可写」和「普通登录用户属主（uid ≥ 1000）」。自定义属组可写（`chgrp deployers` + `g+w`）不会被禁用拉起。
+
+注意：**不检测 POSIX ACL（`setfacl`）与属组可写**，这两类写权限需要人工保证。属主 uid ≥ 1000 一律视为不可信——安装目录务必 `chown root:root`，否则自检会关掉全部自动拉起。
 
 #### 开启安全自检（Linux）
 
+推荐写进 unit（持久、可审计）：
+
 ```bash
-systemctl set-environment WatchDog__EnableStartupSecurityCheck=true
+systemctl edit nightwatch
 ```
+
+```ini
+[Service]
+Environment=WatchDog__EnableStartupSecurityCheck=true
+```
+
+临时验证也可以用 `systemctl set-environment WatchDog__EnableStartupSecurityCheck=true`，但它只存在于运行中的 systemd manager，**重启机器后会丢失**，安全自检会悄悄回到默认关闭——不要作为长期配置。
 
 规则与 Windows 相同：**关闭权只认环境变量或命令行**，不要写在 `appsettings.json` 里。自检开启后用权限位与属主 uid 检查：其他用户可写、属主是普通登录用户（uid ≥ 1000）、或权限读失败时，**只关闭自动拉起**，监控和告警继续。开发环境（`dotnet run`）不检查安装目录和配置文件。
 
@@ -341,7 +352,7 @@ systemctl daemon-reload
 再按需删除 `/opt/nightwatch`。环境变量可保留，或：
 
 ```bash
-systemctl unset-environment WatchDog__EnableStartupSecurityCheck
+rm -rf /etc/systemd/system/nightwatch.service.d   # 若用 systemctl edit 写过 Environment=
 ```
 
 ## 配置说明
@@ -351,12 +362,12 @@ systemctl unset-environment WatchDog__EnableStartupSecurityCheck
 | 节 | 作用 | 主要字段 |
 |----|------|----------|
 | `Notify.Channels` | 通知通道，可叠加 | `Type`：`wecom` / `dingtalk` / `email` |
-| `Processes` | 进程守护 | `Name`、`ProcessName`、`FilePath`（空则只告警）、`Arguments`、`WorkingDirectory`、`RestartIfNotResponding` |
+| `Processes` | 进程守护 | `Name`、`ProcessName`、`FilePath`（空则只告警）、`Arguments`、`WorkingDirectory`、`RestartIfNotResponding`（仅 Windows 生效） |
 | `Services` | 服务守护 | `Name`、`ServiceName`（Windows 为 `sc query` 的服务名；Linux 为 systemd unit 名）、`AutoRestart`、`AllowLaunch` |
 | `Files` | 文件 / 日志 | `Name`、`Path`、`Pattern`、`StaleMinutes`（0 关闭）、`MaxSizeMB`（0 关闭） |
 | `FileHeartbeats` | 文件心跳 | `Name`、`HeartbeatFile`、`StaleMinutes`、可选 `ProcessName` / `FilePath` |
 | `HttpHeartbeat` | HTTP 心跳 | 见下文 |
-| `Resources` | 资源 | `CpuPercent`、`MemoryPercent`（0 关闭）、`Disks` |
+| `Resources` | 资源 | `CpuPercent`、`MemoryPercent`（0 关闭）、`Disks`（Windows 填盘符 `C:`，Linux 填挂载点 `/`） |
 
 监控项通用字段：`IntervalSeconds`（最短 5 秒）、`CooldownMinutes`。每条规则按自己的间隔检查。存活判定和结束进程以可执行文件完整路径为准，不用同名进程冒充；配置了 `FilePath` 时会按可执行文件名自动枚举，因此 `ProcessName` 与实际文件名不一致也不会漏判。
 
@@ -469,7 +480,7 @@ systemctl unset-environment WatchDog__EnableStartupSecurityCheck
 ]
 ```
 
-`FilePath` 为空则只告警不拉起。`RestartIfNotResponding` 仅对有窗口的进程有效。强杀重启同样受 `AllowLaunch` 与退避熔断约束：安全自检禁用拉起、或连续拉起已达上限时只告警、不结束进程，避免把目标留在「已死且不会拉起」的状态。`WorkingDirectory` 留空（或不写）时，子进程工作目录为可执行文件所在目录。
+`FilePath` 为空则只告警不拉起。`RestartIfNotResponding` 仅对有窗口的进程有效，**Linux 没有窗口概念，该开关恒不生效**（不报错，也不会因此重复拉起）。强杀重启同样受 `AllowLaunch` 与退避熔断约束：安全自检禁用拉起、或连续拉起已达上限时只告警、不结束进程，避免把目标留在「已死且不会拉起」的状态。`WorkingDirectory` 留空（或不写）时，子进程工作目录为可执行文件所在目录。
 
 ### 服务守护
 
@@ -596,6 +607,8 @@ netsh advfirewall firewall add rule name="NightWatch HTTP" dir=in action=allow p
 ```
 
 阈值为 `0` 的项不检查。未配置任何磁盘且 CPU/内存都为 0 时，资源监控器不启动。`Disks[].Drive` 在 Windows 写盘符（`C:`），Linux 写挂载点（`/`、`/data`）。CPU/内存采集：Windows 用性能计数器与 `GlobalMemoryStatusEx`，Linux 读 `/proc/stat` 与 `/proc/meminfo`。
+
+Linux 上内存优先读 **cgroup v2** 限额（`/sys/fs/cgroup/memory.current` ÷ `memory.max`），容器里得到的是本容器的使用率；`memory.max` 为 `max`（无限额）或读不到时回退 `/proc/meminfo`（宿主机口径）。CPU 的 `guest` / `guest_nice` 不会重复计入（内核已把它们算进 `user` / `nice`）。
 
 ## 运维
 
