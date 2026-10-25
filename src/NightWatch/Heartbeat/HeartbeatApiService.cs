@@ -13,6 +13,9 @@ namespace NightWatch.Heartbeat;
 /// </summary>
 public class HeartbeatApiService : IHostedService, IAsyncDisposable
 {
+    /// <summary>上报路径中 product / user 单段的最大长度。</summary>
+    internal const int MaxSegmentLength = 128;
+
     private readonly HeartbeatRegistry _registry;
     private readonly Models.HttpHeartbeatOptions _options;
     private readonly ILogger<HeartbeatApiService> _logger;
@@ -26,11 +29,26 @@ public class HeartbeatApiService : IHostedService, IAsyncDisposable
         _logger = logger;
     }
 
+    /// <summary>端点是否真正处于监听状态（未启用、鉴权配置非法、端口占用均为 false）。</summary>
+    internal bool IsStarted => _app is not null;
+
     public async Task StartAsync(CancellationToken ct)
     {
         if (!_options.Enabled)
         {
             _logger.LogInformation("HTTP 心跳服务未启用");
+            return;
+        }
+
+        var host = string.IsNullOrWhiteSpace(_options.Host) ? "localhost" : _options.Host.Trim();
+
+        // 对外监听又没有 Token = 任何人可写入/伪造心跳，且能无界灌键。
+        // 这里直接拒绝启动（降级），而不是悄悄裸奔或让宿主启动失败。
+        if (RequiresToken(host, _options.Token))
+        {
+            _logger.LogError(
+                "HTTP 心跳服务拒绝启动：Host={Host} 会对外监听，但未配置 WatchDog:HttpHeartbeat:Token。" +
+                "请配置随机长令牌，或把 Host 改回 localhost。接收端已降级关闭，其余监控继续运行", host);
             return;
         }
 
@@ -40,7 +58,6 @@ public class HeartbeatApiService : IHostedService, IAsyncDisposable
             EnvironmentName = Environments.Production
         });
         builder.Logging.ClearProviders(); // 外层宿主已配置 Serilog，避免重复输出
-        var host = string.IsNullOrWhiteSpace(_options.Host) ? "localhost" : _options.Host;
         builder.WebHost.UseUrls($"http://{host}:{_options.Port}");
 
         var app = builder.Build();
@@ -68,10 +85,27 @@ public class HeartbeatApiService : IHostedService, IAsyncDisposable
         }
 
         // 心跳上报仅接受 POST，避免 GET 触发写操作 / 被预取和爬虫误触发
+        var maxKeys = _options.MaxKeys <= 0 ? int.MaxValue : _options.MaxKeys;
         app.MapPost("/heartbeat/{product}/{user}",
             (string product, string user, HttpContext ctx) =>
             {
-                _registry.Touch(product, user, ctx.Connection.RemoteIpAddress?.ToString());
+                if (!IsValidSegment(product) || !IsValidSegment(user))
+                {
+                    return Results.Json(
+                        new { ok = false, error = $"product/user 必须非空且不超过 {MaxSegmentLength} 字符" },
+                        statusCode: StatusCodes.Status400BadRequest);
+                }
+
+                product = product.Trim();
+                user = user.Trim();
+                var ip = ctx.Connection.RemoteIpAddress?.ToString();
+                if (!_registry.Touch(product, user, ip, maxKeys))
+                {
+                    return Results.Json(
+                        new { ok = false, error = "heartbeat registry is full" },
+                        statusCode: StatusCodes.Status429TooManyRequests);
+                }
+
                 return Results.Ok(new
                 {
                     ok = true,
@@ -144,6 +178,31 @@ public class HeartbeatApiService : IHostedService, IAsyncDisposable
     {
         if (_app is not null)
             await _app.DisposeAsync();
+    }
+
+    /// <summary>仅本机可访问的监听地址（localhost / IPv4 回环 / IPv6 回环）。</summary>
+    internal static bool IsLoopbackHost(string host) =>
+        host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+        || host.Equals("127.0.0.1", StringComparison.Ordinal)
+        || host.Equals("::1", StringComparison.Ordinal)
+        || host.Equals("[::1]", StringComparison.Ordinal);
+
+    /// <summary>对外监听（0.0.0.0 / * / + / 具体网卡地址）时必须有 Token。</summary>
+    internal static bool RequiresToken(string host, string? token) =>
+        !IsLoopbackHost(host) && string.IsNullOrWhiteSpace(token);
+
+    /// <summary>
+    /// 校验 URL 路径段：非空、不超过 <see cref="MaxSegmentLength"/>、无控制字符。
+    /// 额外拒绝 '/'：否则 "a/b" + "c" 与 "a" + "b/c" 会拼成同一个注册表键。
+    /// </summary>
+    internal static bool IsValidSegment(string? segment)
+    {
+        if (string.IsNullOrWhiteSpace(segment))
+            return false;
+
+        var trimmed = segment.Trim();
+        return trimmed.Length <= MaxSegmentLength
+               && trimmed.All(c => !char.IsControl(c) && c != '/');
     }
 
     private static string? GetBearerToken(string? header) =>
