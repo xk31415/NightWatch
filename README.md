@@ -99,6 +99,10 @@ dotnet publish src\NightWatch -c Release -r win-x64 --self-contained false -o D:
 
 框架依赖：目标机安装 .NET 10 运行时即可，不必装 SDK。
 
+> 发布产物**不包含** `appsettings.json` / `appsettings.Development.json`：开发机上的 `appsettings.json` 含真实凭据，若进包会在解压时覆盖服务器配置（2026-10-25 踩过一次）。包里只有 `appsettings.example.json`，首次部署按下一节复制改名；升级时保留服务器上现有的 `appsettings.json`。
+>
+> 项目里另有 `EnsureNoLocalConfigInPublish` 兜底：它只检查**本次发布要从项目复制出去的文件**，不看目标目录已有内容，因此 `dotnet publish -o <安装目录>` 这种升级方式不会被误拦；一旦发布计划里又出现 `appsettings*.json`（示例文件除外），发布直接失败。
+
 目标机不能装运行时时，改为自包含：
 
 ```bat
@@ -199,7 +203,7 @@ dotnet publish src\NightWatch -c Release -r win-x64 --self-contained false -o D:
 sc start NightWatch
 ```
 
-`dotnet publish` 默认不覆盖你手改的 `appsettings.json`（该文件不在仓库里）。若发布目录里混入了示例配置，先备份再发布。
+发布产物里没有 `appsettings.json`（构建时已排除），所以直接 `dotnet publish -o <安装目录>` 覆盖程序文件不会动到生产配置。守卫只看本次发布计划里从项目复制的文件，目标目录原有的生产配置不会被误判；若将来复制规则又被加回来，发布会直接失败而不是悄悄覆盖。
 
 ### 卸载
 

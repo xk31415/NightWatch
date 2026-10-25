@@ -26,12 +26,38 @@
     <PackageReference Include="System.ServiceProcess.ServiceController" Version="10.0.13" />
   </ItemGroup>
 
+  <!--
+    Worker SDK 默认把 appsettings*.json 同时复制到 bin 和 publish。
+    本地 appsettings.json 含真实凭据，发布时若进包，解压部署会直接覆盖服务器上的生产配置
+    （2026-10-25 已踩过一次）。这里：bin 保留（dotnet run 需要），publish 一律不带，
+    首次部署用 appsettings.example.json 复制。
+  -->
   <ItemGroup>
-    <None Update="appsettings.json">
+    <Content Update="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Update="appsettings.example.json">
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
+    </Content>
+    <Content Update="appsettings.Development.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
+    </Content>
+    <Content Update="appsettings.example.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
   </ItemGroup>
+
+  <!--
+    兜底：只检查「本次发布计划里从项目复制出去的文件」，不看目标目录已有内容。
+    升级命令是 dotnet publish -o <安装目录>，目标目录里本来就有生产配置；
+    若按“目标目录是否存在 appsettings.json”判断，正常升级会被误拦（已踩过）。
+  -->
+  <Target Name="EnsureNoLocalConfigInPublish" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <_NightWatchLeakedConfig Include="@(ResolvedFileToPublish)"
+                               Condition="$([System.String]::Copy('%(Filename)').ToLowerInvariant().StartsWith('appsettings')) and '%(Extension)' == '.json' and '%(Filename)' != 'appsettings.example'" />
+    </ItemGroup>
+    <Error Condition="'@(_NightWatchLeakedConfig)' != ''"
+           Text="本次发布计划包含本地配置：@(_NightWatchLeakedConfig->'%(RelativePath)', ', ')。它来自开发机、含真实凭据，会覆盖服务器配置，已中止发布。" />
+  </Target>
 </Project>
