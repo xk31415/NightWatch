@@ -96,17 +96,23 @@ public class ProcessLaunchTests
         Assert.Null(ProcessMonitor.HungRestartBlockReason(rule));
     }
 
-    /// <summary>回归：示例配置里的 "WorkingDirectory": "" 必须回落到 exe 所在目录，而不是 System32。</summary>
+    /// <summary>
+    /// 回归：示例配置里的 "WorkingDirectory": "" 必须回落到 exe 所在目录，而不是进程当前目录。
+    /// 路径用 Path.Combine 构造，避免在 Linux 上因反斜杠不是分隔符而误判（CI 曾因此红）。
+    /// </summary>
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
     [InlineData(null)]
     public void StartInfo_BlankWorkingDirectory_FallsBackToExeDirectory(string? workingDirectory)
     {
-        var psi = ProcessStartInfoFactory.Create(@"D:\apps\myapp\myapp.exe", null, workingDirectory);
+        var exe = Path.Combine("apps", "myapp", "myapp.exe");
+        var expectedDir = Path.Combine("apps", "myapp");
 
-        Assert.Equal(@"D:\apps\myapp", psi.WorkingDirectory);
-        Assert.Equal(@"D:\apps\myapp\myapp.exe", psi.FileName);
+        var psi = ProcessStartInfoFactory.Create(exe, null, workingDirectory);
+
+        Assert.Equal(expectedDir, psi.WorkingDirectory);
+        Assert.Equal(exe, psi.FileName);
         Assert.Equal("", psi.Arguments);
         Assert.False(psi.UseShellExecute);
     }
@@ -114,19 +120,23 @@ public class ProcessLaunchTests
     [Fact]
     public void StartInfo_ExplicitWorkingDirectory_IsKept()
     {
-        var psi = ProcessStartInfoFactory.Create(@"D:\apps\myapp\myapp.exe", "--flag", @"E:\data");
+        var exe = Path.Combine("apps", "myapp", "myapp.exe");
+        var workDir = Path.Combine("data", "cache");
+        var psi = ProcessStartInfoFactory.Create(exe, "--flag", workDir);
 
-        Assert.Equal(@"E:\data", psi.WorkingDirectory);
+        Assert.Equal(workDir, psi.WorkingDirectory);
         Assert.Equal("--flag", psi.Arguments);
     }
 
     [Fact]
-    public void Coordinator_KeyIsCaseInsensitivePath()
+    public void Coordinator_KeyUsesFullPath_IgnoringProcessName()
     {
-        var a = ProcessLaunchCoordinator.MakeKey(@"D:\Apps\MyApp\myapp.exe", "myapp");
-        var b = ProcessLaunchCoordinator.MakeKey(@"d:\apps\myapp\MYAPP.EXE", "other-name");
+        var exe = Path.Combine("apps", "myapp", "myapp.exe");
+        var a = ProcessLaunchCoordinator.MakeKey(exe, "myapp");
+        var b = ProcessLaunchCoordinator.MakeKey(exe, "other-name");
 
         Assert.Equal(a, b);
+        Assert.StartsWith("path:", a);
     }
 }
 

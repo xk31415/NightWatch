@@ -14,6 +14,7 @@ public class ServiceLaunchGateTests
     [InlineData(false, true, ServiceUnitStatus.Stopped, false)]
     [InlineData(true, true, ServiceUnitStatus.Running, false)]
     [InlineData(true, true, ServiceUnitStatus.StartPending, false)]
+    [InlineData(true, true, ServiceUnitStatus.NotFound, false)]
     public void AutoRestart_RequiresAllowLaunch(bool autoRestart, bool allowLaunch, ServiceUnitStatus status, bool expected)
     {
         var rule = new ServiceRule { AutoRestart = autoRestart, AllowLaunch = allowLaunch };

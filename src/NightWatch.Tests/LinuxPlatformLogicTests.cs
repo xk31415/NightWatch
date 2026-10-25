@@ -86,6 +86,7 @@ public class LinuxPlatformLogicTests
 
     [Theory]
     [InlineData("active", ServiceUnitStatus.Running)]
+    [InlineData("reloading", ServiceUnitStatus.Running)]
     [InlineData("inactive", ServiceUnitStatus.Stopped)]
     [InlineData("failed", ServiceUnitStatus.Stopped)]
     [InlineData("activating", ServiceUnitStatus.StartPending)]
@@ -95,5 +96,16 @@ public class LinuxPlatformLogicTests
     public void SystemdStatus_MapsToUnifiedEnum(string output, ServiceUnitStatus expected)
     {
         Assert.Equal(expected, SystemdServiceControl.Map(output));
+    }
+
+    /// <summary>单元不存在必须与“已停止”区分开，否则 unit 名写错会被当成状态异常反复尝试启动。</summary>
+    [Fact]
+    public void SystemdStatus_UnknownUnit_MapsToNotFound()
+    {
+        // is-active 对不存在的单元返回退出码 4
+        Assert.Equal(ServiceUnitStatus.NotFound, SystemdServiceControl.Map("inactive", 4));
+        Assert.Equal(ServiceUnitStatus.NotFound, SystemdServiceControl.Map("unknown", 0));
+        // 正常查询（退出码 3 = 未运行）仍是 Stopped
+        Assert.Equal(ServiceUnitStatus.Stopped, SystemdServiceControl.Map("inactive", 3));
     }
 }
