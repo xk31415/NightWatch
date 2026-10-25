@@ -88,8 +88,9 @@ public abstract class PollingMonitorBase : BackgroundService
         var alertCooldown = cooldown ?? AlertCooldown;
         if (result.IsHealthy)
         {
-            // 健康状态记 Information：正常运行与恢复后的健康记录在日志里可见，便于排查
-            Logger.LogInformation("[{Monitor}] {Rule}: {Message}", MonitorName, ruleKey, result.Message);
+            // 持续健康只记 Debug，避免生产日志被每轮 OK 刷屏。
+            // 从异常恢复仍记 Information，并在下方推送一次恢复通知。
+            Logger.LogDebug("[{Monitor}] {Rule}: {Message}", MonitorName, ruleKey, result.Message);
             _lastAlertUtc.Remove(ruleKey);
 
             if (!_unhealthyRules.Remove(ruleKey) || !result.Notify)
