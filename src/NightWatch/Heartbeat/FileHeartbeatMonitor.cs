@@ -14,7 +14,7 @@ public class FileHeartbeatMonitor : PollingMonitorBase
 {
     private readonly List<HeartbeatRule> _rules;
     private readonly ProcessLaunchCoordinator _launchGuard;
-    private readonly Dictionary<string, RestartState> _restarts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly RestartBackoff _backoff = new();
 
     public FileHeartbeatMonitor(WatchDogOptions options, ProcessLaunchCoordinator launchGuard,
         IEventNotifier notifier, ILogger<FileHeartbeatMonitor> logger)
@@ -58,7 +58,7 @@ public class FileHeartbeatMonitor : PollingMonitorBase
         var age = DateTime.Now - lastWrite;
         if (age.TotalMinutes <= rule.StaleMinutes)
         {
-            ResetRestart(rule.Name);
+            _backoff.Reset(rule.Name);
             return MonitorResult.Healthy($"心跳正常（{age.TotalSeconds:F0} 秒前更新）");
         }
 
@@ -73,10 +73,10 @@ public class FileHeartbeatMonitor : PollingMonitorBase
             return MonitorResult.Unhealthy(msg + "（安全自检已禁用自动拉起，仅告警）");
         if (string.IsNullOrWhiteSpace(rule.FilePath))
             return MonitorResult.Unhealthy(msg + "（未配置 FilePath，仅告警、不结束进程）");
-        if (!CanRestart(rule))
+        if (!_backoff.TryClaim(rule.Name, rule.StaleMinutes, out var fused))
         {
-            return _restarts[rule.Name].Failures >= RestartState.MaxFailures
-                ? MonitorResult.Unhealthy(msg + $"，已连续重启 {RestartState.MaxFailures} 次无效，已停止自动拉起，需人工介入")
+            return fused
+                ? MonitorResult.Unhealthy(msg + $"，已连续重启 {RestartBackoff.MaxAttempts} 次无效，已停止自动拉起，需人工介入")
                 : MonitorResult.Unhealthy(msg + "，处于重启退避中，本轮不杀进程");
         }
 
@@ -97,42 +97,15 @@ public class FileHeartbeatMonitor : PollingMonitorBase
                 WorkingDirectory = Path.GetDirectoryName(rule.FilePath) ?? ""
             };
             using var p = Process.Start(psi);
-            NoteRestart(rule.Name);
+            _backoff.NoteAttempt(rule.Name);
             Logger.LogInformation("心跳超时后已拉起 {File}", rule.FilePath);
             return MonitorResult.Unhealthy(msg + "，已重启目标进程");
         }
         catch (Exception ex)
         {
-            NoteRestart(rule.Name);
+            _backoff.NoteAttempt(rule.Name);
             Logger.LogError(ex, "心跳超时后拉起进程 {File} 失败", rule.FilePath);
             return MonitorResult.Unhealthy(msg + "，且重启失败");
         }
-    }
-
-    private bool CanRestart(HeartbeatRule rule)
-    {
-        if (!_restarts.TryGetValue(rule.Name, out var state))
-            return true;
-        if (state.Failures >= RestartState.MaxFailures)
-            return false;
-        var delay = TimeSpan.FromMinutes(Math.Max(1, rule.StaleMinutes) * (1 << Math.Min(state.Failures, 2)));
-        return DateTime.UtcNow - state.LastLaunchUtc >= delay;
-    }
-
-    private void NoteRestart(string key)
-    {
-        if (!_restarts.TryGetValue(key, out var state))
-            state = _restarts[key] = new RestartState();
-        state.LastLaunchUtc = DateTime.UtcNow;
-        state.Failures++;
-    }
-
-    private void ResetRestart(string key) => _restarts.Remove(key);
-
-    private sealed class RestartState
-    {
-        public const int MaxFailures = 5;
-        public DateTime LastLaunchUtc;
-        public int Failures;
     }
 }

@@ -145,8 +145,10 @@ public static class StartupSecurityCheck
             DisableLaunch(rule);
         foreach (var rule in options.FileHeartbeats)
             DisableLaunch(rule);
+        foreach (var rule in options.Services)
+            DisableLaunch(rule);
 
-        var msg = "配置或安装位置不可信，已禁用全部进程守护与文件心跳的自动拉起（监控与告警继续运行）";
+        var msg = "配置或安装位置不可信，已禁用全部进程守护、文件心跳与 Windows 服务的自动拉起（监控与告警继续运行）";
         logger.Error("[安全自检] {Msg}", msg);
         if (!problems.Contains(msg))
             problems.Add(msg);
@@ -155,6 +157,8 @@ public static class StartupSecurityCheck
     private static void DisableLaunch(ProcessRule rule) => rule.AllowLaunch = false;
 
     private static void DisableLaunch(HeartbeatRule rule) => rule.AllowLaunch = false;
+
+    private static void DisableLaunch(ServiceRule rule) => rule.AllowLaunch = false;
 
     private static bool TryEvaluate(FileSystemInfo info, out bool writable, out string error)
     {

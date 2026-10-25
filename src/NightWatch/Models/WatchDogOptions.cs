@@ -63,6 +63,13 @@ public class ServiceRule
     public string ServiceName { get; set; } = "";
 
     public bool AutoRestart { get; set; } = true;
+
+    /// <summary>
+    /// 是否允许自动启动或继续。安全自检判定配置或安装位置不可信时会关闭，监控与告警保留。
+    /// 默认 true，旧配置不写该字段时行为不变。
+    /// </summary>
+    public bool AllowLaunch { get; set; } = true;
+
     public int IntervalSeconds { get; set; } = 60;
     public int CooldownMinutes { get; set; } = 10;
 }

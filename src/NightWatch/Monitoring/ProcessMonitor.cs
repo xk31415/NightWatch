@@ -13,7 +13,7 @@ public class ProcessMonitor : PollingMonitorBase
 {
     private readonly List<ProcessRule> _rules;
     private readonly ProcessLaunchCoordinator _launchGuard;
-    private readonly Dictionary<string, RestartState> _restarts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly RestartBackoff _backoff = new();
 
     public ProcessMonitor(WatchDogOptions options, ProcessLaunchCoordinator launchGuard,
         IEventNotifier notifier, ILogger<ProcessMonitor> logger)
@@ -71,7 +71,7 @@ public class ProcessMonitor : PollingMonitorBase
                     StartOutcome.Disabled => MonitorResult.Unhealthy(
                         $"进程 {cleanName} 不存在（安全自检已禁用自动拉起，仅告警）"),
                     StartOutcome.Fused => MonitorResult.Unhealthy(
-                        $"进程 {cleanName} 不存在，自动拉起已熔断（连续失败），需人工介入"),
+                        $"进程 {cleanName} 不存在，自动拉起已熔断（已连续尝试 {RestartBackoff.MaxAttempts} 次），需人工介入"),
                     StartOutcome.BackingOff => MonitorResult.Unhealthy(
                         $"进程 {cleanName} 不存在，处于重启退避中，本轮只告警",
                         notify: false),
@@ -79,7 +79,7 @@ public class ProcessMonitor : PollingMonitorBase
                 });
             }
 
-            ResetRestart(rule.Name);
+            _backoff.Reset(rule.Name);
 
             if (rule.RestartIfNotResponding)
             {
@@ -124,10 +124,8 @@ public class ProcessMonitor : PollingMonitorBase
             return StartOutcome.Disabled;
         if (string.IsNullOrWhiteSpace(rule.FilePath))
             return StartOutcome.NotConfigured;
-        if (!CanLaunch(rule.Name, Math.Max(1, rule.IntervalSeconds / 60.0)))
-            return CurrentRestart(rule.Name).Failures >= RestartState.MaxFailures
-                ? StartOutcome.Fused
-                : StartOutcome.BackingOff;
+        if (!_backoff.TryClaim(rule.Name, Math.Max(1, rule.IntervalSeconds / 60.0), out var fused))
+            return fused ? StartOutcome.Fused : StartOutcome.BackingOff;
 
         if (!_launchGuard.TryBeginLaunch(ProcessLaunchCoordinator.MakeKey(rule.FilePath, rule.ProcessName)))
             return StartOutcome.Deduped;
@@ -143,44 +141,14 @@ public class ProcessMonitor : PollingMonitorBase
             };
             using var p = Process.Start(psi);
             Logger.LogInformation("已启动进程 {File} (PID {Pid})", rule.FilePath, p?.Id);
-            NoteLaunch(rule.Name);
+            _backoff.NoteAttempt(rule.Name);
             return p is not null ? StartOutcome.Started : StartOutcome.Failed;
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "拉起进程 {File} 失败", rule.FilePath);
-            NoteLaunch(rule.Name);
+            _backoff.NoteAttempt(rule.Name);
             return StartOutcome.Failed;
         }
-    }
-
-    private RestartState CurrentRestart(string key) =>
-        _restarts.TryGetValue(key, out var s) ? s : new RestartState();
-
-    private bool CanLaunch(string key, double staleMinutes)
-    {
-        if (!_restarts.TryGetValue(key, out var state))
-            return true;
-        if (state.Failures >= RestartState.MaxFailures)
-            return false;
-        var delay = TimeSpan.FromMinutes(Math.Max(1, staleMinutes) * (1 << Math.Min(state.Failures, 2)));
-        return DateTime.UtcNow - state.LastLaunchUtc >= delay;
-    }
-
-    private void NoteLaunch(string key)
-    {
-        if (!_restarts.TryGetValue(key, out var state))
-            state = _restarts[key] = new RestartState();
-        state.LastLaunchUtc = DateTime.UtcNow;
-        state.Failures++;
-    }
-
-    private void ResetRestart(string key) => _restarts.Remove(key);
-
-    private sealed class RestartState
-    {
-        public const int MaxFailures = 5;
-        public DateTime LastLaunchUtc;
-        public int Failures;
     }
 }

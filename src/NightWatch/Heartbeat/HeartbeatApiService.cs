@@ -116,11 +116,17 @@ public class HeartbeatApiService : IHostedService, IAsyncDisposable
             ? header["Bearer ".Length..].Trim()
             : null;
 
-    /// <summary>恒定时间比较，避免时序侧信道逐字节猜 Token。</summary>
-    private static bool TokensEqual(string provided, string expected)
+    /// <summary>
+    /// 恒定时间比较，避免时序侧信道逐字节猜 Token。
+    /// 长度不同直接拒绝：<c>FixedTimeEquals</c> 要求两段等长，否则抛 <see cref="ArgumentException"/>，
+    /// 错误令牌会从 401 变成 500。
+    /// </summary>
+    internal static bool TokensEqual(string provided, string expected)
     {
         var a = System.Text.Encoding.UTF8.GetBytes(provided);
         var b = System.Text.Encoding.UTF8.GetBytes(expected);
+        if (a.Length != b.Length)
+            return false;
         return System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(a, b);
     }
 }
