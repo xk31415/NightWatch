@@ -60,10 +60,56 @@ public static class ProcessImage
             return matches;
         }
 
-        if (!string.IsNullOrWhiteSpace(cleanName))
-            return new List<Process>(byName(cleanName));
+        if (string.IsNullOrWhiteSpace(cleanName))
+            return new List<Process>();
 
-        return new List<Process>();
+        var nameMatches = new List<Process>(byName(cleanName));
+
+        // 同样受 comm 截断影响：只配 ProcessName 的规则（仅告警场景）在 Linux 上按全名
+        // 枚举不到长名进程，会误报“不存在”。落空时回退全量扫描，按全名或 15 字符前缀匹配。
+        if (nameMatches.Count == 0)
+            nameMatches = FilterByName(cleanName, all());
+
+        return nameMatches;
+    }
+
+    /// <summary>Linux 内核 /proc/&lt;pid&gt;/stat 的 comm 上限（含结尾 NUL 共 16 字节）。</summary>
+    private const int LinuxCommLength = 15;
+
+    private static List<Process> FilterByName(string name, IEnumerable<Process> candidates)
+    {
+        var comparison = PlatformServices.PathComparison;
+        var truncated = OperatingSystem.IsLinux() && name.Length > LinuxCommLength
+            ? name[..LinuxCommLength]
+            : null;
+
+        var matches = new List<Process>();
+        foreach (var p in candidates)
+        {
+            if (MatchesName(p, name, truncated, comparison))
+                matches.Add(p);
+            else
+                p.Dispose();
+        }
+
+        return matches;
+    }
+
+    private static bool MatchesName(Process process, string name, string? truncated, StringComparison comparison)
+    {
+        string? actual;
+        try
+        {
+            actual = process.ProcessName;
+        }
+        catch
+        {
+            // 进程可能已退出；读不到名字就不认作目标
+            return false;
+        }
+
+        return string.Equals(actual, name, comparison)
+               || (truncated is not null && string.Equals(actual, truncated, comparison));
     }
 
     private static List<Process> FilterByImage(IEnumerable<Process> candidates, string filePath)

@@ -44,18 +44,20 @@ public class ProcessImageTests
         Assert.Equal(1, allCalls);
     }
 
+
     [Fact]
-    public void FindTargets_NameOnlyRule_DoesNotScanAllProcesses()
+    public void FindTargets_NameOnly_WhenNameLookupMisses_FallsBackToFullScan()
     {
         var byNameCalls = 0;
         var allCalls = 0;
 
-        ProcessImage.FindTargets("myapp", null,
+        var result = ProcessImage.FindTargets("nightwatch-long-process-name", null,
             byName: _ => { byNameCalls++; return Array.Empty<Process>(); },
             all: () => { allCalls++; return Array.Empty<Process>(); });
 
+        Assert.Empty(result);
         Assert.Equal(1, byNameCalls);
-        Assert.Equal(0, allCalls);
+        Assert.Equal(1, allCalls);
     }
 
     [Fact]

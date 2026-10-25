@@ -249,6 +249,8 @@ dotnet publish src/NightWatch -c Release -r linux-x64 --self-contained true -o /
 
 也可从 GitHub Actions 的 `NightWatch-linux-x64` 制品下载后解压到安装目录。
 
+> 从 Windows 交叉发布（`-r linux-x64`）或经 zip 传输时，**可执行位会丢失**：解压后执行 `chmod +x /opt/nightwatch/NightWatch`，否则 systemd 启动会报 `Permission denied`。框架依赖发布同样需要 apphost 可执行；也可在 unit 里改用 `ExecStart=/usr/bin/dotnet /opt/nightwatch/NightWatch.dll` 绕开。
+
 #### 编写配置（Linux）
 
 ```bash
@@ -338,6 +340,7 @@ ls /opt/nightwatch/logs
 ```bash
 systemctl stop nightwatch
 dotnet publish src/NightWatch -c Release -r linux-x64 --self-contained false -o /opt/nightwatch
+chmod +x /opt/nightwatch/NightWatch   # 从 Windows 交叉发布/zip 传输后必须补执行位
 systemctl start nightwatch
 ```
 

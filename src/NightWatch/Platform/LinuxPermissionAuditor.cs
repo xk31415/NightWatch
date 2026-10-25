@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.Versioning;
 
 namespace NightWatch.Platform;
@@ -8,6 +7,7 @@ namespace NightWatch.Platform;
 /// - 所有者非特权（uid 非 0 且 ≥ 1000，即普通登录用户）→ 不可信（可 chmod/替换内容）；
 /// - 其他用户可写（other-write，等价 Windows 的 Everyone/Users 可写）→ 不可信。
 /// 属主组可写视为自定义部署组，放行（对应 Windows 自检只拦宽泛组、不拦 APP_DEPLOYERS）。
+/// 注意：不检测 POSIX ACL（setfacl）与属组可写，这两类写权限需人工保证。
 /// </summary>
 public sealed class LinuxPermissionAuditor : IPermissionAuditor
 {
@@ -44,27 +44,21 @@ public sealed class LinuxPermissionAuditor : IPermissionAuditor
         return ownerUnprivileged || worldWritable;
     }
 
-    /// <summary>用 coreutils 的 stat 取属主 uid；.NET BCL 不暴露 Unix 属主 API。</summary>
+    /// <summary>
+    /// 用 coreutils 的 stat 取属主 uid（.NET BCL 不暴露 Unix 属主 API）。
+    /// 走统一的 <see cref="ProcessRunner"/>：ArgumentList 传参、15 秒超时、捕获 stderr。
+    /// </summary>
     [SupportedOSPlatform("linux")]
     private static int GetOwnerUid(string path)
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "stat",
-            Arguments = $"-c %u \"{path}\"",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false
-        };
+        var result = ProcessRunner.Run("stat", ["-c", "%u", path]);
+        if (result.ExitCode != 0)
+            throw new InvalidOperationException($"stat {path} 失败（退出码 {result.ExitCode}）: {result.Stderr.Trim()}");
 
-        using var proc = Process.Start(psi)
-            ?? throw new InvalidOperationException("无法启动 stat");
-        var output = proc.StandardOutput.ReadToEnd();
-        proc.WaitForExit();
+        var text = result.Stdout.Trim();
+        if (!int.TryParse(text, out var uid))
+            throw new InvalidOperationException($"stat {path} 输出无法解析: 「{text}」");
 
-        if (proc.ExitCode != 0)
-            throw new InvalidOperationException($"stat {path} 失败（退出码 {proc.ExitCode}）");
-
-        return int.Parse(output.Trim());
+        return uid;
     }
 }

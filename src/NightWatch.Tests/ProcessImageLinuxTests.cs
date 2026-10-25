@@ -58,6 +58,18 @@ public class ProcessImageLinuxTests
                 {
                     foreach (var p in found) p.Dispose();
                 }
+
+                // 只配 ProcessName（不配 FilePath）的规则同样受 comm 截断影响：
+                // 按全名枚举不到，必须回退全量扫描并按 15 字符前缀匹配。
+                var byNameOnly = ProcessImage.FindTargets("nightwatch-long-process-name", null);
+                try
+                {
+                    Assert.Contains(byNameOnly, p => p.Id == proc!.Id);
+                }
+                finally
+                {
+                    foreach (var p in byNameOnly) p.Dispose();
+                }
             }
             finally
             {
