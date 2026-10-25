@@ -105,6 +105,16 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<QueuedNotifier>())
 
 RuleNameGuard.Normalize(options, Log.Logger);
 
+// ---- 监控时段：校验配置并说明全局时段（未配置 = 24 小时生效） ----
+foreach (var problem in Schedule.Validate(options))
+    Log.Warning("监控时段配置问题: {Problem}", problem);
+
+if (options.Schedule is { Windows.Count: > 0 })
+{
+    Log.Information("全局监控时段: {Windows}（时段外{Outside}）", Schedule.Describe(options.Schedule),
+        options.Schedule.Mode == ScheduleMode.Off ? "完全停止检查" : "继续监控与拉起、只静默通知");
+}
+
 // ---- H4 部署安全自检：关闭权只认环境变量/命令行；配置可写时强制检查并禁用拉起 ----
 var rawSwitch = builder.Configuration["WatchDog:EnableStartupSecurityCheck"];
 var legacySwitch = builder.Configuration["WatchDog:SkipProcessSecurityCheck"];

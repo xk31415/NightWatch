@@ -11,11 +11,13 @@ namespace NightWatch.Monitoring;
 public class FileLogMonitor : PollingMonitorBase
 {
     private readonly List<FileRule> _rules;
+    private readonly ScheduleRule? _defaultSchedule;
 
     public FileLogMonitor(WatchDogOptions options, IEventNotifier notifier, ILogger<FileLogMonitor> logger)
         : base(notifier, logger)
     {
         _rules = options.Files;
+        _defaultSchedule = options.Schedule;
     }
 
     protected override string MonitorName => "文件监控";
@@ -27,11 +29,13 @@ public class FileLogMonitor : PollingMonitorBase
         foreach (var rule in _rules)
         {
             ct.ThrowIfCancellationRequested();
+            if (!TryEnterSchedule(rule.Name, Schedule.Resolve(rule.Schedule, _defaultSchedule), out var suppress))
+                continue;
             if (!IsRuleDue(rule.Name, rule.IntervalSeconds))
                 continue;
 
             var result = CheckRule(rule);
-            await ReportAsync(rule.Name, result, ct, Minutes(rule.CooldownMinutes));
+            await ReportAsync(rule.Name, result, ct, Minutes(rule.CooldownMinutes), suppress);
         }
     }
 
