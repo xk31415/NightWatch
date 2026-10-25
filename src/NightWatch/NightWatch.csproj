@@ -46,6 +46,10 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
+    <Content Update="appsettings.example.linux.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
   </ItemGroup>
 
   <!--
@@ -56,7 +60,7 @@
   <Target Name="EnsureNoLocalConfigInPublish" AfterTargets="ComputeResolvedFilesToPublishList">
     <ItemGroup>
       <_NightWatchLeakedConfig Include="@(ResolvedFileToPublish)"
-                               Condition="$([System.String]::Copy('%(Filename)').ToLowerInvariant().StartsWith('appsettings')) and '%(Extension)' == '.json' and '%(Filename)' != 'appsettings.example'" />
+                               Condition="$([System.String]::Copy('%(Filename)').ToLowerInvariant().StartsWith('appsettings')) and '%(Extension)' == '.json' and !$([System.String]::Copy('%(Filename)').ToLowerInvariant().StartsWith('appsettings.example'))" />
     </ItemGroup>
     <Error Condition="'@(_NightWatchLeakedConfig)' != ''"
            Text="本次发布计划包含本地配置：@(_NightWatchLeakedConfig->'%(RelativePath)', ', ')。它来自开发机、含真实凭据，会覆盖服务器配置，已中止发布。" />

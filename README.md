@@ -362,6 +362,8 @@ rm -rf /etc/systemd/system/nightwatch.service.d   # 若用 systemctl edit 写过
 
 全部选项在 `appsettings.json` 的 `WatchDog` 节。不需要的数组留空或不写，对应监控器不会启动。
 
+Windows 用 `appsettings.example.json`，Linux 用 `appsettings.example.linux.json`：后者路径是 `/opt/myapp`、`/var/log/myapp` 风格，`Resources.Disks[].Drive` 填挂载点（`/`），`Services[].ServiceName` 填 systemd unit 名（`myapp.service`）。
+
 | 节 | 作用 | 主要字段 |
 |----|------|----------|
 | `Notify.Channels` | 通知通道，可叠加 | `Type`：`wecom` / `dingtalk` / `email` |

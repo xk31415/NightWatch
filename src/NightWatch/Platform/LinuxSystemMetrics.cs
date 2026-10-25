@@ -7,29 +7,54 @@ public sealed class LinuxSystemMetrics : ISystemMetrics
 {
     private (long Idle, long Total)? _lastCpuSample;
 
+    /// <summary>首次调用（没有历史采样）时的采样窗口。</summary>
+    internal static readonly TimeSpan FirstSampleWindow = TimeSpan.FromMilliseconds(500);
+
     public async Task<double?> GetCpuPercentAsync(CancellationToken ct)
     {
+        // 已取消的令牌直接抛出，不必先读 /proc，也让取消语义可测
+        ct.ThrowIfCancellationRequested();
+
         try
         {
-            var first = await ReadCpuSampleAsync(ct);
-            await Task.Delay(500, ct);
-            var second = await ReadCpuSampleAsync(ct);
+            var current = await ReadCpuSampleAsync(ct);
+            var previous = _lastCpuSample;
 
-            // 优先用上一轮遗留的采样做差值，避免每次采样都 sleep 后仍然只有 500ms 窗口。
-            var prev = _lastCpuSample ?? first;
-            _lastCpuSample = second;
+            if (previous is null)
+            {
+                // 首次调用没有历史采样，只能等一个短窗口再采一次
+                await Task.Delay(FirstSampleWindow, ct);
+                previous = current;
+                current = await ReadCpuSampleAsync(ct);
+            }
 
-            var dTotal = second.Total - prev.Total;
-            var dIdle = second.Idle - prev.Idle;
-            if (dTotal <= 0)
-                return null;
-
-            return 100.0 * (dTotal - dIdle) / dTotal;
+            _lastCpuSample = current;
+            return ComputeCpuPercent(previous.Value, current);
+        }
+        catch (OperationCanceledException)
+        {
+            // 停机取消必须向上抛，否则关闭流程会被当成“采集失败”吞掉
+            throw;
         }
         catch (Exception)
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// 两次 /proc/stat 采样求整机 CPU 使用率。采样间隔为 0（计数未变化）时返回 null；
+    /// 计数器回绕导致 idle 减少时按 0 空闲处理，结果夹在 [0,100]。
+    /// </summary>
+    internal static double? ComputeCpuPercent((long Idle, long Total) previous, (long Idle, long Total) current)
+    {
+        var deltaTotal = current.Total - previous.Total;
+        if (deltaTotal <= 0)
+            return null;
+
+        var deltaIdle = current.Idle - previous.Idle;
+        var busy = Math.Clamp(deltaTotal - deltaIdle, 0, deltaTotal);
+        return 100.0 * busy / deltaTotal;
     }
 
     public double GetMemoryUsedPercent()
