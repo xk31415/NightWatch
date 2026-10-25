@@ -15,6 +15,7 @@ public class FileHeartbeatMonitor : PollingMonitorBase
     private readonly List<HeartbeatRule> _rules;
     private readonly ProcessLaunchCoordinator _launchGuard;
     private readonly RestartBackoff _backoff = new();
+    private readonly ScheduleRule? _defaultSchedule;
 
     public FileHeartbeatMonitor(WatchDogOptions options, ProcessLaunchCoordinator launchGuard,
         IEventNotifier notifier, ILogger<FileHeartbeatMonitor> logger)
@@ -22,6 +23,7 @@ public class FileHeartbeatMonitor : PollingMonitorBase
     {
         _rules = options.FileHeartbeats;
         _launchGuard = launchGuard;
+        _defaultSchedule = options.Schedule;
     }
 
     protected override string MonitorName => "文件心跳";
@@ -33,11 +35,13 @@ public class FileHeartbeatMonitor : PollingMonitorBase
         foreach (var rule in _rules)
         {
             ct.ThrowIfCancellationRequested();
+            if (!TryEnterSchedule(rule.Name, Schedule.Resolve(rule.Schedule, _defaultSchedule), out var suppress))
+                continue;
             if (!IsRuleDue(rule.Name, rule.IntervalSeconds))
                 continue;
 
             var result = CheckRule(rule, ct);
-            await ReportAsync(rule.Name, result, ct, Minutes(rule.CooldownMinutes));
+            await ReportAsync(rule.Name, result, ct, Minutes(rule.CooldownMinutes), suppress);
         }
     }
 

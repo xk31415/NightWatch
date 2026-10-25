@@ -1,3 +1,4 @@
+using NightWatch.Models;
 using NightWatch.Notification;
 
 namespace NightWatch.Monitoring;
@@ -5,6 +6,7 @@ namespace NightWatch.Monitoring;
 /// <summary>
 /// 轮询型监控器基类：按固定间隔循环执行 CheckAsync，
 /// 异常结果记日志并推送通知，且按规则键做冷却节流防止告警轰炸。
+/// 支持按规则的监控/告警时段：时段外可只静默告警（继续监控与拉起），或完全停止检查。
 /// </summary>
 public abstract class PollingMonitorBase : BackgroundService
 {
@@ -18,6 +20,9 @@ public abstract class PollingMonitorBase : BackgroundService
     private readonly HashSet<string> _alertedRules = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly Dictionary<string, DateTime> _nextCheckUtc = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>每条规则上一次的时段状态，用于只在切换时写一条日志。</summary>
+    private readonly Dictionary<string, bool> _windowActive = new(StringComparer.OrdinalIgnoreCase);
 
     protected ILogger Logger { get; }
 
@@ -86,6 +91,45 @@ public abstract class PollingMonitorBase : BackgroundService
         return true;
     }
 
+    /// <summary>
+    /// 判断规则当前是否应执行检查。
+    /// 返回 false 表示时段外且 Mode=Off，调用方应整条跳过（不检查、不告警、不拉起）。
+    /// 返回 true 且 <paramref name="suppressNotifications"/> = true 表示时段外但保留监控：
+    /// 照常检查与自动拉起，只是不推送外部通知。
+    /// </summary>
+    protected bool TryEnterSchedule(string ruleKey, ScheduleRule? schedule, out bool suppressNotifications) =>
+        TryEnterScheduleAt(ruleKey, schedule, DateTime.Now, out suppressNotifications);
+
+    /// <summary>可注入当前时间，供测试固定时刻。</summary>
+    internal bool TryEnterScheduleAt(string ruleKey, ScheduleRule? schedule, DateTime now, out bool suppressNotifications)
+    {
+        suppressNotifications = false;
+        if (schedule is null || schedule.Windows.Count == 0)
+        {
+            _windowActive.Remove(ruleKey);
+            return true;
+        }
+
+        var active = Schedule.IsActive(schedule, now, out var reason);
+        var first = !_windowActive.TryGetValue(ruleKey, out var wasActive);
+        if (first || wasActive != active)
+        {
+            _windowActive[ruleKey] = active;
+            Logger.LogInformation("[{Monitor}] {Rule} 进入{Phase}：{Window}（{Reason}）",
+                MonitorName, ruleKey, active ? "监控时段" : "非监控时段", Schedule.Describe(schedule), reason);
+        }
+
+        if (active)
+            return true;
+
+        // 时段外：Off 完全跳过；NoAlert 继续检查与拉起，只静默通知
+        if (schedule.Mode == ScheduleMode.Off)
+            return false;
+
+        suppressNotifications = true;
+        return true;
+    }
+
     /// <summary>移除动态规则的全部状态（例如 HTTP 心跳键超过保留期被清理）。</summary>
     protected void ForgetRule(string ruleKey)
     {
@@ -93,6 +137,7 @@ public abstract class PollingMonitorBase : BackgroundService
         _unhealthyRules.Remove(ruleKey);
         _alertedRules.Remove(ruleKey);
         _nextCheckUtc.Remove(ruleKey);
+        _windowActive.Remove(ruleKey);
     }
 
     /// <summary>
@@ -102,7 +147,11 @@ public abstract class PollingMonitorBase : BackgroundService
     /// 短暂异常不打扰运维，但状态仍然记录，避免抑制分支把恢复通知吞掉。
     /// </summary>
     /// <param name="cooldown">该规则的告警冷却时间；不传则用监控器默认值。</param>
-    protected async Task ReportAsync(string ruleKey, MonitorResult result, CancellationToken ct, TimeSpan? cooldown = null)
+    /// <param name="suppressNotifications">
+    /// true 时只记日志、不推送（时段外 NoAlert）。此时也不占用告警冷却：时段恢复后若仍异常会立即推送。
+    /// </param>
+    protected async Task ReportAsync(string ruleKey, MonitorResult result, CancellationToken ct,
+        TimeSpan? cooldown = null, bool suppressNotifications = false)
     {
         var alertCooldown = cooldown ?? AlertCooldown;
         if (result.IsHealthy)
@@ -118,6 +167,12 @@ public abstract class PollingMonitorBase : BackgroundService
                 return;
 
             Logger.LogInformation("[{Monitor}] {Rule}: 已恢复正常。{Message}", MonitorName, ruleKey, result.Message);
+            if (suppressNotifications)
+            {
+                Logger.LogInformation("[{Monitor}] {Rule}: 时段外，恢复通知已抑制", MonitorName, ruleKey);
+                return;
+            }
+
             await _notifier.SendAsync(new AlertMessage
             {
                 Title = $"{MonitorName} / {ruleKey}",
@@ -134,6 +189,12 @@ public abstract class PollingMonitorBase : BackgroundService
 
         if (!result.Notify)
             return;
+
+        if (suppressNotifications)
+        {
+            Logger.LogDebug("[{Monitor}] {Rule}: 时段外，告警通知已抑制（日志已记录）", MonitorName, ruleKey);
+            return;
+        }
 
         var now = DateTime.UtcNow;
         if (_lastAlertUtc.TryGetValue(ruleKey, out var last) && now - last < alertCooldown)

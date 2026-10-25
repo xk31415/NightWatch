@@ -14,6 +14,7 @@ public class ProcessMonitor : PollingMonitorBase
     private readonly List<ProcessRule> _rules;
     private readonly ProcessLaunchCoordinator _launchGuard;
     private readonly RestartBackoff _backoff = new();
+    private readonly ScheduleRule? _defaultSchedule;
 
     public ProcessMonitor(WatchDogOptions options, ProcessLaunchCoordinator launchGuard,
         IEventNotifier notifier, ILogger<ProcessMonitor> logger)
@@ -21,6 +22,7 @@ public class ProcessMonitor : PollingMonitorBase
     {
         _rules = options.Processes;
         _launchGuard = launchGuard;
+        _defaultSchedule = options.Schedule;
     }
 
     protected override string MonitorName => "进程监控";
@@ -32,11 +34,13 @@ public class ProcessMonitor : PollingMonitorBase
         foreach (var rule in _rules)
         {
             ct.ThrowIfCancellationRequested();
+            if (!TryEnterSchedule(rule.Name, Schedule.Resolve(rule.Schedule, _defaultSchedule), out var suppress))
+                continue;
             if (!IsRuleDue(rule.Name, rule.IntervalSeconds))
                 continue;
 
             var result = await CheckRuleAsync(rule, ct);
-            await ReportAsync(rule.Name, result, ct, Minutes(rule.CooldownMinutes));
+            await ReportAsync(rule.Name, result, ct, Minutes(rule.CooldownMinutes), suppress);
         }
     }
 

@@ -69,7 +69,7 @@ public class HttpHeartbeatMonitorTests
     private sealed class Probe : HttpHeartbeatMonitor
     {
         public Probe(HeartbeatRegistry registry, HttpHeartbeatOptions options, IEventNotifier notifier)
-            : base(registry, options, notifier, NullLogger<HttpHeartbeatMonitor>.Instance)
+            : base(registry, options, new WatchDogOptions(), notifier, NullLogger<HttpHeartbeatMonitor>.Instance)
         {
         }
 

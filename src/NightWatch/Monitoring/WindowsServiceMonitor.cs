@@ -10,11 +10,13 @@ namespace NightWatch.Monitoring;
 public class WindowsServiceMonitor : PollingMonitorBase
 {
     private readonly List<ServiceRule> _rules;
+    private readonly ScheduleRule? _defaultSchedule;
 
     public WindowsServiceMonitor(WatchDogOptions options, IEventNotifier notifier, ILogger<WindowsServiceMonitor> logger)
         : base(notifier, logger)
     {
         _rules = options.Services;
+        _defaultSchedule = options.Schedule;
     }
 
     protected override string MonitorName => "服务监控";
@@ -26,11 +28,13 @@ public class WindowsServiceMonitor : PollingMonitorBase
         foreach (var rule in _rules)
         {
             ct.ThrowIfCancellationRequested();
+            if (!TryEnterSchedule(rule.Name, Schedule.Resolve(rule.Schedule, _defaultSchedule), out var suppress))
+                continue;
             if (!IsRuleDue(rule.Name, rule.IntervalSeconds))
                 continue;
 
             var result = await Task.Run(() => CheckRule(rule), ct);
-            await ReportAsync(rule.Name, result, ct, Minutes(rule.CooldownMinutes));
+            await ReportAsync(rule.Name, result, ct, Minutes(rule.CooldownMinutes), suppress);
         }
     }
 

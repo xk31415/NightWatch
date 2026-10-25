@@ -13,14 +13,16 @@ public class HttpHeartbeatMonitor : PollingMonitorBase
 {
     private readonly HeartbeatRegistry _registry;
     private readonly HttpHeartbeatOptions _options;
+    private readonly ScheduleRule? _defaultSchedule;
     private readonly HashSet<string> _everSeen = new(StringComparer.OrdinalIgnoreCase);
 
-    public HttpHeartbeatMonitor(HeartbeatRegistry registry, HttpHeartbeatOptions options,
+    public HttpHeartbeatMonitor(HeartbeatRegistry registry, HttpHeartbeatOptions options, WatchDogOptions watchDogOptions,
         IEventNotifier notifier, ILogger<HttpHeartbeatMonitor> logger)
         : base(notifier, logger)
     {
         _registry = registry;
         _options = options;
+        _defaultSchedule = watchDogOptions.Schedule;
     }
 
     protected override string MonitorName => "HTTP心跳";
@@ -28,6 +30,9 @@ public class HttpHeartbeatMonitor : PollingMonitorBase
 
     protected override async Task CheckAllAsync(CancellationToken ct)
     {
+        if (!TryEnterSchedule("http-heartbeat", Schedule.Resolve(_options.Schedule, _defaultSchedule), out var suppress))
+            return;
+
         // 动态客户端长期不上报后退出监控，避免永久重复告警；Expected 必达键随后仍按缺失处理。
         foreach (var key in _registry.RemoveStale(TimeSpan.FromMinutes(_options.RetentionMinutes)))
         {
@@ -51,7 +56,7 @@ public class HttpHeartbeatMonitor : PollingMonitorBase
                 ? MonitorResult.Unhealthy($"心跳超时: {kv.Key} 已 {ageMinutes:F1} 分钟未上报（阈值 {staleMinutes} 分钟），最近来源 {kv.Value.LastIp ?? "未知"}")
                 : MonitorResult.Healthy($"{kv.Key} 心跳正常（{ageMinutes * 60:F0} 秒前上报）");
 
-            await ReportAsync(kv.Key, result, ct, Minutes(_options.CooldownMinutes));
+            await ReportAsync(kv.Key, result, ct, Minutes(_options.CooldownMinutes), suppress);
         }
 
         // 2. 必达清单：从未上报过的键
@@ -63,7 +68,7 @@ public class HttpHeartbeatMonitor : PollingMonitorBase
                 var result = MonitorResult.Unhealthy(_everSeen.Contains(key)
                     ? $"必达心跳缺失: {key} 超过保留期未再上报"
                     : $"必达心跳缺失: {key} 从未上报过心跳");
-                await ReportAsync(key, result, ct, Minutes(_options.CooldownMinutes));
+                await ReportAsync(key, result, ct, Minutes(_options.CooldownMinutes), suppress);
             }
         }
     }

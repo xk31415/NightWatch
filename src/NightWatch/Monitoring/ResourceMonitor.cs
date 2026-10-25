@@ -11,12 +11,14 @@ namespace NightWatch.Monitoring;
 public class ResourceMonitor : PollingMonitorBase
 {
     private readonly ResourceRule _rule;
+    private readonly ScheduleRule? _defaultSchedule;
     private PerformanceCounter? _cpuCounter;
 
     public ResourceMonitor(WatchDogOptions options, IEventNotifier notifier, ILogger<ResourceMonitor> logger)
         : base(notifier, logger)
     {
         _rule = options.Resources;
+        _defaultSchedule = options.Schedule;
     }
 
     protected override string MonitorName => "资源监控";
@@ -24,6 +26,9 @@ public class ResourceMonitor : PollingMonitorBase
 
     protected override async Task CheckAllAsync(CancellationToken ct)
     {
+        if (!TryEnterSchedule("system-resources", Schedule.Resolve(_rule.Schedule, _defaultSchedule), out var suppress))
+            return;
+
         var problems = new List<string>();
 
         if (_rule.CpuPercent > 0)
@@ -71,7 +76,7 @@ public class ResourceMonitor : PollingMonitorBase
         var result = problems.Count > 0
             ? MonitorResult.Unhealthy(string.Join("; ", problems))
             : MonitorResult.Healthy("系统资源正常");
-        await ReportAsync(key, result, ct, Minutes(_rule.CooldownMinutes));
+        await ReportAsync(key, result, ct, Minutes(_rule.CooldownMinutes), suppress);
     }
 
     /// <summary>取整机 CPU 使用率。PerformanceCounter 首次调用无数据，跳过返回 null。</summary>

@@ -18,6 +18,12 @@ public class WatchDogOptions
     public HttpHeartbeatOptions? HttpHeartbeat { get; set; }
 
     /// <summary>
+    /// 全局监控/告警时段；null = 24 小时生效。单条规则自己的 Schedule 会覆盖它。
+    /// 为空对象或空 Windows 列表也表示全天生效，可用于让某条规则摆脱全局时段。
+    /// </summary>
+    public ScheduleRule? Schedule { get; set; }
+
+    /// <summary>
     /// 启用 H4 部署安全自检（默认关闭）。关闭权只认环境变量
     /// WatchDog__EnableStartupSecurityCheck 或命令行；配置文件可写时文件里的 false 无效。
     /// 开启后：宽泛组可写或所有者非特权即禁用自动拉起（监控保留）并告警。
@@ -52,6 +58,9 @@ public class ProcessRule
 
     /// <summary>是否允许自动拉起。安全自检失败时会关闭，监控与告警保留。</summary>
     public bool AllowLaunch { get; set; } = true;
+
+    /// <summary>该规则的监控/告警时段；不写则继承全局 Schedule。</summary>
+    public ScheduleRule? Schedule { get; set; }
 }
 
 /// <summary>Windows 服务监控规则：服务停止时自动启动。</summary>
@@ -72,6 +81,9 @@ public class ServiceRule
 
     public int IntervalSeconds { get; set; } = 60;
     public int CooldownMinutes { get; set; } = 10;
+
+    /// <summary>该规则的监控/告警时段；不写则继承全局 Schedule。</summary>
+    public ScheduleRule? Schedule { get; set; }
 }
 
 /// <summary>文件/日志监控规则：检查日志停更（卡死）与异常膨胀。</summary>
@@ -92,6 +104,9 @@ public class FileRule
 
     public int IntervalSeconds { get; set; } = 60;
     public int CooldownMinutes { get; set; } = 30;
+
+    /// <summary>该规则的监控/告警时段；不写则继承全局 Schedule。</summary>
+    public ScheduleRule? Schedule { get; set; }
 }
 
 /// <summary>心跳监控规则：被守护程序定期 touch 心跳文件，超时未更新则告警/重启。</summary>
@@ -117,6 +132,9 @@ public class HeartbeatRule
 
     /// <summary>是否允许心跳超时后杀进程并拉起。安全自检失败时会关闭，监控与告警保留。</summary>
     public bool AllowLaunch { get; set; } = true;
+
+    /// <summary>该规则的监控/告警时段；不写则继承全局 Schedule。</summary>
+    public ScheduleRule? Schedule { get; set; }
 }
 
 /// <summary>系统资源监控规则：CPU / 内存 / 磁盘阈值。</summary>
@@ -133,6 +151,9 @@ public class ResourceRule
 
     /// <summary>磁盘剩余空间阈值检查。</summary>
     public List<DiskRule> Disks { get; set; } = new();
+
+    /// <summary>资源监控的时段；不写则继承全局 Schedule。</summary>
+    public ScheduleRule? Schedule { get; set; }
 }
 
 public class DiskRule
@@ -187,6 +208,9 @@ public class HttpHeartbeatOptions
 
     /// <summary>按产品覆盖超时阈值。</summary>
     public List<ProductStaleOverride> Products { get; set; } = new();
+
+    /// <summary>HTTP 心跳检查的时段；不写则继承全局 Schedule。</summary>
+    public ScheduleRule? Schedule { get; set; }
 }
 
 /// <summary>某产品专属的心跳超时阈值。</summary>
@@ -232,4 +256,46 @@ public class NotifyChannel
 
     /// <summary>收件人列表。</summary>
     public List<string> To { get; set; } = new();
+}
+
+/// <summary>
+/// 监控/告警时段。不配置（null）或 <see cref="Windows"/> 为空 = 24 小时生效。
+/// </summary>
+public class ScheduleRule
+{
+    /// <summary>时段列表；为空表示全天生效（可用于让单条规则摆脱全局时段）。</summary>
+    public List<TimeWindow> Windows { get; set; } = new();
+
+    /// <summary>
+    /// 时段外的行为：NoAlert（默认）= 继续检查、继续自动拉起，但不发外部通知；
+    /// Off = 完全停止检查（不告警、不拉起，也不更新状态）。
+    /// </summary>
+    public ScheduleMode Mode { get; set; } = ScheduleMode.NoAlert;
+}
+
+/// <summary>时段外行为。</summary>
+public enum ScheduleMode
+{
+    /// <summary>继续监控与自动拉起，只是不推送告警（夜间免打扰）。</summary>
+    NoAlert,
+
+    /// <summary>完全停止该规则的检查与拉起（非营业时间不监控）。</summary>
+    Off
+}
+
+/// <summary>
+/// 一个时间窗口，按服务器本地时间判定，区间为 [Start, End)。
+/// Start &gt; End 表示跨零点（例如 22:00-06:00），<see cref="Days"/> 指开始那天。
+/// Start 与 End 相同表示整天。
+/// </summary>
+public class TimeWindow
+{
+    /// <summary>生效星期：Mon/Monday..Sun 或 1..7（周一=1），也接受「周一」等中文；为空 = 每天。</summary>
+    public List<string> Days { get; set; } = new();
+
+    /// <summary>开始时间 HH:mm（含）。</summary>
+    public string Start { get; set; } = "00:00";
+
+    /// <summary>结束时间 HH:mm（不含）。</summary>
+    public string End { get; set; } = "00:00";
 }
