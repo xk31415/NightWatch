@@ -36,6 +36,11 @@ public sealed class LinuxSystemMetrics : ISystemMetrics
     {
         try
         {
+            // 容器里 /proc/meminfo 是宿主机口径；cgroup v2 有限额时以限额为准。
+            var cgroup = ReadCgroupMemoryUsedPercent();
+            if (cgroup is not null)
+                return cgroup.Value;
+
             var map = ReadMemInfo();
             if (!map.TryGetValue("MemTotal", out var total) || total <= 0)
                 return 0;
@@ -55,10 +60,10 @@ public sealed class LinuxSystemMetrics : ISystemMetrics
         }
     }
 
-    /// <summary>/proc/stat 首行的 idle 与 total 采样。total 含 idle + iowait。</summary>
+    /// <summary>/proc/stat 首行的 idle 与 total 采样。idle 含 iowait；total 不含 guest/guest_nice。</summary>
     internal static (long Idle, long Total) ParseCpuLine(string line)
     {
-        // 形如: cpu  user nice system idle iowait irq softirq steal ...
+        // 形如: cpu  user nice system idle iowait irq softirq steal guest guest_nice
         var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length < 5 || parts[0] != "cpu")
             throw new FormatException($"/proc/stat 首行格式异常: {line}");
@@ -72,9 +77,52 @@ public sealed class LinuxSystemMetrics : ISystemMetrics
         }
 
         var total = Sum(1);
+
+        // 内核把 guest / guest_nice 的时间已经算进 user / nice，重复相加会让 total 偏大、
+        // CPU 使用率偏低。它们在尾部两个字段（下标 9、10），有就减掉。
+        if (parts.Length > 9)
+            total -= long.Parse(parts[9]);
+        if (parts.Length > 10)
+            total -= long.Parse(parts[10]);
+
         // idle 在下标 4；iowait（下标 5）与 idle 同属非忙碌时间，一并计入。
         var idle = long.Parse(parts[4]) + (parts.Length > 5 ? long.Parse(parts[5]) : 0);
         return (idle, total);
+    }
+
+    /// <summary>
+    /// cgroup v2 内存使用率：/sys/fs/cgroup/memory.current ÷ memory.max。
+    /// memory.max 为 "max"（无限额）或读不到时返回 null，回退到 /proc/meminfo。
+    /// </summary>
+    internal static double? ComputeCgroupMemoryPercent(string currentText, string maxText)
+    {
+        var max = (maxText ?? "").Trim();
+        if (max.Length == 0 || max == "max")
+            return null;
+
+        if (!long.TryParse(max, out var limit) || limit <= 0)
+            return null;
+        if (!long.TryParse((currentText ?? "").Trim(), out var usage) || usage < 0)
+            return null;
+
+        return Math.Clamp(100.0 * usage / limit, 0, 100);
+    }
+
+    private static double? ReadCgroupMemoryUsedPercent()
+    {
+        const string currentPath = "/sys/fs/cgroup/memory.current";
+        const string maxPath = "/sys/fs/cgroup/memory.max";
+        try
+        {
+            if (!File.Exists(currentPath) || !File.Exists(maxPath))
+                return null;
+
+            return ComputeCgroupMemoryPercent(File.ReadAllText(currentPath), File.ReadAllText(maxPath));
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>解析 /proc/meminfo，值统一为 kB。</summary>

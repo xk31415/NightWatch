@@ -51,6 +51,11 @@ public class ServiceMonitor : PollingMonitorBase
             if (status == ServiceUnitStatus.Running)
                 return MonitorResult.Healthy($"服务 {rule.ServiceName} 运行中");
 
+            // 单元不存在是配置问题，不能落到“状态异常”里误导成 AutoRestart 开关问题，也不该反复尝试启动
+            if (status == ServiceUnitStatus.NotFound)
+                return MonitorResult.Unhealthy(
+                    $"服务 {rule.ServiceName} 不存在：Windows 填 sc query 的服务名，Linux 填 systemd unit 名（如 myapp.service）");
+
             if (CanAttemptRestart(rule, status))
             {
                 Logger.LogInformation("尝试启动服务 {Service}（当前状态 {Status}）", rule.ServiceName, status);

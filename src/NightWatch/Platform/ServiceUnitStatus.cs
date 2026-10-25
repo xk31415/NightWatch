@@ -18,6 +18,9 @@ public enum ServiceUnitStatus
     /// <summary>启动中（Windows: StartPending；systemd: activating）。</summary>
     StartPending,
 
+    /// <summary>单元不存在（systemd: is-active 退出码 4 / unknown）。Windows 侧由 ServiceController 抛异常表达。</summary>
+    NotFound,
+
     /// <summary>其他/未知状态。</summary>
     Other
 }

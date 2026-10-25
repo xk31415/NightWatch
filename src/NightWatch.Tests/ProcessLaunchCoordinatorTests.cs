@@ -14,7 +14,26 @@ public class ProcessLaunchCoordinatorTests
         Assert.Equal("name:myapp", key);
         Assert.True(guard.TryBeginLaunch(key));
         Assert.False(guard.TryBeginLaunch(key));
-        Assert.False(guard.TryBeginLaunch(key.ToUpperInvariant()));
+    }
+
+    /// <summary>
+    /// 去重键的大小写语义跟随平台：Windows 路径不敏感，Linux 敏感。
+    /// 这里用两条仅大小写不同的路径验证，避免 Linux 上两个不同目标共用去重窗口。
+    /// </summary>
+    [Fact]
+    public void PathKeyCaseSensitivity_FollowsPlatform()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "nw-case-probe");
+        var lower = ProcessLaunchCoordinator.MakeKey(Path.Combine(baseDir, "app", "x.exe"), "x");
+        var upper = ProcessLaunchCoordinator.MakeKey(Path.Combine(baseDir, "APP", "X.EXE"), "x");
+
+        var guard = new ProcessLaunchCoordinator();
+        Assert.True(guard.TryBeginLaunch(lower));
+
+        if (OperatingSystem.IsWindows())
+            Assert.False(guard.TryBeginLaunch(upper));
+        else
+            Assert.True(guard.TryBeginLaunch(upper));
     }
 
     [Fact]
@@ -30,7 +49,7 @@ public class ProcessLaunchCoordinatorTests
     {
         var guard = new ProcessLaunchCoordinator();
         guard.ForceBeginLaunch("svc");
-        Assert.False(guard.TryBeginLaunch("SVC"));
+        Assert.False(guard.TryBeginLaunch("svc"));
     }
 
     [Fact]

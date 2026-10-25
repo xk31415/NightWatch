@@ -5,6 +5,9 @@ namespace NightWatch.Platform;
 /// </summary>
 public static class PlatformServices
 {
+    /// <summary>当前是否有完整实现（Windows / Linux）。其它平台启动时会给出明确提示并退出。</summary>
+    public static bool IsSupported => OperatingSystem.IsWindows() || OperatingSystem.IsLinux();
+
     public static IServiceControl CreateServiceControl()
     {
         if (OperatingSystem.IsWindows())

@@ -83,6 +83,21 @@ jobs:
           test -f publish/NightWatch || { echo "NightWatch 可执行文件未生成"; exit 1; }
           ls -la publish
 
+      # 冒烟：证明二进制能在 Linux 上真正启动（此前从未运行过，只剩“编译通过”）。
+      # 配置为空 => 没有监控器；进程常驻，8 秒后被 timeout 杀掉属正常。
+      # 0 = 收到 SIGTERM 后优雅退出；124 = 被 timeout 杀掉；其它 = 启动失败。
+      - name: Smoke run (linux)
+        run: |
+          set +e
+          timeout 8s ./publish/NightWatch
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ] && [ "$code" -ne 124 ]; then
+            echo "Linux 启动冒烟失败，退出码 $code"
+            exit 1
+          fi
+          echo "启动冒烟通过（退出码 $code）"
+
       - name: Upload publish artifact
         uses: actions/upload-artifact@v4
         with:

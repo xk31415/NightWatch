@@ -18,7 +18,14 @@ public class ProcessLaunchCoordinator
         public DateTime LastLaunchUtc = DateTime.MinValue;
     }
 
-    private readonly ConcurrentDictionary<string, Entry> _entries = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// 去重键比较规则：Windows 路径大小写不敏感，Linux 敏感。
+    /// 不能用 OrdinalIgnoreCase —— 在 Linux 上 /opt/App/x 与 /opt/app/x 是两个不同的可执行文件。
+    /// </summary>
+    private static readonly StringComparer KeyComparer =
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    private readonly ConcurrentDictionary<string, Entry> _entries = new(KeyComparer);
 
     /// <summary>
     /// 尝试领取启动权。返回 false 表示该启动键在去重窗口内刚被拉起过（或正在拉起），
@@ -62,13 +69,17 @@ public class ProcessLaunchCoordinator
         }
     }
 
-    /// <summary>启动键：优先用可执行文件完整路径（跨监控器一致），无路径时退回进程名。</summary>
+    /// <summary>
+    /// 启动键：优先用可执行文件完整路径（跨监控器一致），无路径时退回进程名。
+    /// 路径不做大小写折叠——由 <see cref="KeyComparer"/> 按平台决定是否忽略大小写，
+    /// 否则 Linux 上两个仅大小写不同的目标会共用同一个去重窗口。
+    /// </summary>
     public static string MakeKey(string? filePath, string? processName)
     {
         if (!string.IsNullOrWhiteSpace(filePath))
         {
-            try { return Path.GetFullPath(filePath).ToLowerInvariant(); }
-            catch { return filePath.ToLowerInvariant(); }
+            try { return "path:" + Path.GetFullPath(filePath); }
+            catch { return "path:" + filePath; }
         }
         return $"name:{(processName ?? "").Trim().ToLowerInvariant()}";
     }

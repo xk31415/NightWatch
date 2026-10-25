@@ -6,7 +6,10 @@ namespace NightWatch.Platform;
 /// </summary>
 public interface IServiceControl
 {
-    /// <summary>查询服务单元状态。找不到单元时抛出异常，由调用方转为 Unhealthy 告警。</summary>
+    /// <summary>
+    /// 查询服务单元状态。单元不存在时返回 <see cref="ServiceUnitStatus.NotFound"/>
+    /// （Windows 实现的 <c>ServiceController</c> 会抛异常，由调用方按 Unhealthy 处理）。
+    /// </summary>
     ServiceUnitStatus GetStatus(string serviceName);
 
     /// <summary>启动已停止的服务单元。</summary>

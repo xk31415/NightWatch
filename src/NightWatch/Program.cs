@@ -84,8 +84,19 @@ Log.Logger = new LoggerConfiguration()
 builder.Logging.AddSerilog(Log.Logger);
 
 // ---- 平台抽象：服务控制 / 资源采集 / 权限审计，按当前 OS 选实现 ----
-builder.Services.AddSingleton(PlatformServices.CreateServiceControl());
-builder.Services.AddSingleton(PlatformServices.CreateSystemMetrics());
+// 仅 Windows / Linux 有完整实现；其它平台直接给出明确提示退出，
+// 而不是在创建实现时抛一个 PlatformNotSupportedException。
+if (!PlatformServices.IsSupported)
+{
+    Log.Fatal("NightWatch 仅支持 Windows 与 Linux，当前平台 {Platform} 不受支持", Environment.OSVersion.Platform);
+    Log.CloseAndFlush();
+    Environment.ExitCode = 1;
+    return;
+}
+
+// 服务控制与资源采集按需创建（未配置对应监控器时不会被解析）；权限审计在自检里要先用到。
+builder.Services.AddSingleton<IServiceControl>(_ => PlatformServices.CreateServiceControl());
+builder.Services.AddSingleton<ISystemMetrics>(_ => PlatformServices.CreateSystemMetrics());
 var permissionAuditor = PlatformServices.CreatePermissionAuditor();
 builder.Services.AddSingleton(permissionAuditor);
 
