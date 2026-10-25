@@ -1,0 +1,34 @@
+# 构建产物
+bin/
+obj/
+publish/
+publish-sc/
+out/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# 日志
+logs/
+*.log
+
+# 运行时数据
+heartbeat*.txt
+
+# 本地测试运行产物
+.testrun/
+
+# 敏感配置：包含 webhook key、加签 secret、SMTP 授权码，禁止入库
+# 模板见 appsettings.example.json
+src/NightWatch/appsettings.json
+
+# 操作系统
+Thumbs.db
+.DS_Store
+
+# WorkBuddy 工作区数据（AI 助手内部记忆，非项目代码）
+.workbuddy/

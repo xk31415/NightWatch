@@ -1,0 +1,51 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    name: Build (Release, win-x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: |
+          dotnet restore src/NightWatch/NightWatch.csproj
+          dotnet restore src/NightWatch.Tests/NightWatch.Tests.csproj
+
+      - name: Build (Release)
+        run: dotnet build src/NightWatch/NightWatch.csproj -c Release --no-restore
+
+      - name: Test
+        run: dotnet test src/NightWatch.Tests/NightWatch.Tests.csproj -c Release
+
+      - name: Publish (win-x64, framework-dependent)
+        run: dotnet publish src/NightWatch/NightWatch.csproj -c Release -r win-x64 --self-contained false -o publish
+
+      - name: Verify build output
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "publish/NightWatch.exe")) { throw "NightWatch.exe 未生成" }
+          Get-ChildItem publish | Format-Table Name, Length
+
+      # 注意：appsettings.json 含真实凭据，已被 .gitignore 排除，不会出现在 CI 产物中。
+      # 部署时用 appsettings.example.json 复制改名并填入真实值。
+      - name: Upload publish artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NightWatch-win-x64
+          path: publish/
+          retention-days: 14
