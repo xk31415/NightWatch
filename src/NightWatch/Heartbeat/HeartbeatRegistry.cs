@@ -35,19 +35,35 @@ public class HeartbeatRegistry
         };
     }
 
-    /// <summary>记录一次心跳上报（重复上报刷新时间并累加计数）。</summary>
-    public void Touch(string product, string user, string? ip = null)
+    /// <summary>
+    /// 记录一次心跳上报（重复上报刷新时间并累加计数）。
+    /// <paramref name="maxKeys"/> 已达上限时，新键返回 false（拒绝写入），已有键仍可刷新。
+    /// 容量判断是尽力而为：并发下可能略微超出上限，但不会被无界写入撑爆。
+    /// </summary>
+    public bool Touch(string product, string user, string? ip = null, int maxKeys = int.MaxValue)
     {
         var key = $"{product}/{user}";
         var now = DateTime.UtcNow;
-        _entries.AddOrUpdate(key,
-            _ => new HeartbeatEntry { LastSeenUtc = now, LastIp = ip, Count = 1 },
-            (_, entry) => new HeartbeatEntry
-            {
-                LastSeenUtc = now,
-                LastIp = ip ?? entry.LastIp,
-                Count = entry.Count + 1
-            });
+
+        if (_entries.ContainsKey(key))
+        {
+            _entries.AddOrUpdate(key,
+                _ => new HeartbeatEntry { LastSeenUtc = now, LastIp = ip, Count = 1 },
+                (_, entry) => new HeartbeatEntry
+                {
+                    LastSeenUtc = now,
+                    LastIp = ip ?? entry.LastIp,
+                    Count = entry.Count + 1
+                });
+            return true;
+        }
+
+        if (maxKeys > 0 && _entries.Count >= maxKeys)
+            return false;
+
+        // 并发下另一个线程可能刚加入同一个键：按刷新成功处理，避免误报 429
+        return _entries.TryAdd(key, new HeartbeatEntry { LastSeenUtc = now, LastIp = ip, Count = 1 })
+               || _entries.ContainsKey(key);
     }
 
     public IReadOnlyDictionary<string, HeartbeatEntry> Snapshot() => _entries;

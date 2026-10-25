@@ -89,13 +89,7 @@ public class FileHeartbeatMonitor : PollingMonitorBase
 
         try
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = rule.FilePath,
-                Arguments = rule.Arguments ?? "",
-                UseShellExecute = false,
-                WorkingDirectory = Path.GetDirectoryName(rule.FilePath) ?? ""
-            };
+            var psi = ProcessStartInfoFactory.Create(rule.FilePath, rule.Arguments, workingDirectory: null);
             using var p = Process.Start(psi);
             _backoff.NoteAttempt(rule.Name);
             Logger.LogInformation("心跳超时后已拉起 {File}", rule.FilePath);

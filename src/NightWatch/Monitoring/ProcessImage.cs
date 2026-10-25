@@ -32,42 +32,37 @@ public static class ProcessImage
     }
 
     /// <summary>
-    /// 配置了 FilePath 时只收映像路径匹配的进程；读不到 MainModule 的同名进程不当作目标。
+    /// 配置了 FilePath 时以路径为准：枚举名取可执行文件名主干，再用完整路径过滤。
+    /// 不能用配置里的 ProcessName 作为枚举名——它和实际文件名不一致时（例如配置 "my-service"，文件是 myapp.exe）
+    /// 会永远找不到已启动的进程，于是每个检查周期都重新拉起一次，恰好击穿“防双实例”。
     /// 未配置 FilePath 时退回进程名（仅告警场景）。
     /// </summary>
     public static List<Process> FindTargets(string? cleanName, string? filePath)
     {
-        var matches = new List<Process>();
-        if (!string.IsNullOrWhiteSpace(filePath) && !string.IsNullOrWhiteSpace(cleanName))
-        {
-            foreach (var p in Process.GetProcessesByName(cleanName))
-            {
-                var image = TryGetImage(p);
-                if (image is not null && PathsEqual(image, filePath))
-                    matches.Add(p);
-                else
-                    p.Dispose();
-            }
-
-            return matches;
-        }
-
         if (!string.IsNullOrWhiteSpace(filePath))
-        {
-            foreach (var p in Process.GetProcesses())
-            {
-                var image = TryGetImage(p);
-                if (image is not null && PathsEqual(image, filePath))
-                    matches.Add(p);
-                else
-                    p.Dispose();
-            }
-
-            return matches;
-        }
+            return FindByImage(Path.GetFileNameWithoutExtension(filePath), filePath);
 
         if (!string.IsNullOrWhiteSpace(cleanName))
-            matches.AddRange(Process.GetProcessesByName(cleanName));
+            return new List<Process>(Process.GetProcessesByName(cleanName));
+
+        return new List<Process>();
+    }
+
+    private static List<Process> FindByImage(string? enumName, string filePath)
+    {
+        var matches = new List<Process>();
+        var candidates = string.IsNullOrWhiteSpace(enumName)
+            ? Process.GetProcesses()
+            : Process.GetProcessesByName(enumName);
+
+        foreach (var p in candidates)
+        {
+            var image = TryGetImage(p);
+            if (image is not null && PathsEqual(image, filePath))
+                matches.Add(p);
+            else
+                p.Dispose();
+        }
 
         return matches;
     }

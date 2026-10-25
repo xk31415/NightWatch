@@ -35,15 +35,36 @@ public static class AclEvaluator
         WellKnownSidType.BuiltinAdministratorsSid
     ];
 
+    /// <summary>
+    /// NT SERVICE\TrustedInstaller（S-1-5-80-956008885-…）。Windows 组件与 Program Files 等目录的默认所有者，
+    /// 属特权服务账户：它不在 WellKnownSidType 里，只按内置枚举判断会把系统目录/系统 exe 误报成“所有者非特权”，
+    /// 导致安全自检在加固过的机器上误禁自动拉起。
+    /// </summary>
+    private static readonly SecurityIdentifier TrustedInstallerSid =
+        new("S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464");
+
+    /// <summary>NT SERVICE\* 服务 SID 前缀（S-1-5-80 及其子授权）。</summary>
+    private const string NtServiceSidPrefix = "S-1-5-80";
+
     public static bool IsBroadUserSid(SecurityIdentifier sid) =>
         BroadSidTypes.Any(sid.IsWellKnown);
 
+    /// <summary>
+    /// 所有者是否特权：SYSTEM / Administrators，以及 TrustedInstaller 与 NT SERVICE\* 服务账户。
+    /// 这些账户不是普通交互用户，无法被低权限用户冒用。
+    /// </summary>
     public static bool IsPrivilegedOwner(SecurityIdentifier sid) =>
-        PrivilegedOwnerTypes.Any(sid.IsWellKnown);
+        PrivilegedOwnerTypes.Any(sid.IsWellKnown)
+        || sid.Equals(TrustedInstallerSid)
+        || IsNtServiceSid(sid);
 
-    /// <summary>owner 为宽泛组或非 SYSTEM/Administrators 的 SID 时视为可改 DACL。</summary>
+    /// <summary>owner 为宽泛组、或不是特权账户（例如某个普通用户/自定义用户组）时，视为可改 DACL。</summary>
     public static bool IsUnprivilegedOwner(SecurityIdentifier? owner) =>
         owner is not null && (IsBroadUserSid(owner) || !IsPrivilegedOwner(owner));
+
+    private static bool IsNtServiceSid(SecurityIdentifier sid) =>
+        sid.Value.Equals(NtServiceSidPrefix, StringComparison.OrdinalIgnoreCase)
+        || sid.Value.StartsWith(NtServiceSidPrefix + "-", StringComparison.OrdinalIgnoreCase);
 
     public static bool HasBroadUserWrite(FileSystemSecurity acl) =>
         IsUnprivilegedOwner(TryGetOwner(acl)) || HasBroadAceWrite(acl);
@@ -59,11 +80,14 @@ public static class AclEvaluator
             if (rule.IdentityReference is not SecurityIdentifier sid || !IsBroadUserSid(sid))
                 continue;
 
+            // 继承项（含 InheritOnly）也参与判定：它决定未来在目录里新建的文件拿到什么权限。
+            // 但必须先映射 GENERIC_* 位，否则只读的 GR|GE 会被误判成可写。
+            var rights = Normalize(rule.FileSystemRights);
             var key = sid.Value;
             if (rule.AccessControlType == AccessControlType.Allow)
-                allow[key] = allow.GetValueOrDefault(key) | rule.FileSystemRights;
+                allow[key] = allow.GetValueOrDefault(key) | rights;
             else if (rule.AccessControlType == AccessControlType.Deny)
-                deny[key] = deny.GetValueOrDefault(key) | rule.FileSystemRights;
+                deny[key] = deny.GetValueOrDefault(key) | rights;
         }
 
         foreach (var key in allow.Keys.Union(deny.Keys, StringComparer.OrdinalIgnoreCase))
@@ -76,6 +100,46 @@ public static class AclEvaluator
         }
 
         return false;
+    }
+
+    private const int GenericAll = 0x10000000;
+    private const int GenericExecute = 0x20000000;
+    private const int GenericWrite = 0x40000000;
+    private const int GenericRead = unchecked((int)0x80000000);
+
+    /// <summary>
+    /// 把 GENERIC_* 位映射成具体文件权限位后再做掩码判断。
+    /// 系统目录（如 C:\Windows\System32、C:\Program Files）的继承项通常写成 0xA0000000
+    /// （GENERIC_READ | GENERIC_EXECUTE），若直接参与运算，纯只读授权会被当成可写，
+    /// 导致加固过的安装目录被自检误判为不可信。Deny 同样要映射，否则 Deny 掩不掉泛型位。
+    /// </summary>
+    internal static FileSystemRights Normalize(FileSystemRights rights)
+    {
+        var raw = (int)rights;
+        if ((raw & GenericAll) != 0)
+            return FileSystemRights.FullControl;
+
+        var mapped = raw & ~(GenericRead | GenericWrite | GenericExecute | GenericAll);
+        if ((raw & GenericWrite) != 0)
+        {
+            mapped |= (int)(FileSystemRights.WriteData | FileSystemRights.AppendData
+                            | FileSystemRights.WriteExtendedAttributes | FileSystemRights.WriteAttributes);
+        }
+
+        if ((raw & GenericRead) != 0)
+        {
+            mapped |= (int)(FileSystemRights.ReadData | FileSystemRights.ReadAttributes
+                            | FileSystemRights.ReadExtendedAttributes | FileSystemRights.ReadPermissions
+                            | FileSystemRights.Synchronize);
+        }
+
+        if ((raw & GenericExecute) != 0)
+        {
+            mapped |= (int)(FileSystemRights.ExecuteFile | FileSystemRights.ReadAttributes
+                            | FileSystemRights.Synchronize);
+        }
+
+        return (FileSystemRights)mapped;
     }
 
     public static SecurityIdentifier? TryGetOwner(FileSystemSecurity acl)

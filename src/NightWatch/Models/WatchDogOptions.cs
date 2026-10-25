@@ -179,6 +179,12 @@ public class HttpHeartbeatOptions
     /// <summary>必达清单（格式 "product/user"）：从未上报过也会告警，不受保留期清理影响。</summary>
     public List<string> Expected { get; set; } = new();
 
+    /// <summary>
+    /// 最多保留的动态心跳键数量。键来自 URL，任何能访问端点的人都能创建；
+    /// 达到上限后拒绝新键（已有键仍可正常刷新），避免无界写入撑爆内存。0 = 不限制。
+    /// </summary>
+    public int MaxKeys { get; set; } = 10_000;
+
     /// <summary>按产品覆盖超时阈值。</summary>
     public List<ProductStaleOverride> Products { get; set; } = new();
 }
