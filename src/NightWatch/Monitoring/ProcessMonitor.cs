@@ -88,7 +88,12 @@ public class ProcessMonitor : PollingMonitorBase
                 }).ToList();
 
                 if (hung.Count > 0)
-                    return Task.FromResult(RestartHung(rule, hung, cleanName));
+                {
+                    // 唯一入口：门禁（AllowLaunch / FilePath / 退避 / 去重）都在 HandleHungProcesses 内部，
+                    // 不要在这里直接 Kill 或 Process.Start，否则会绕过安全自检。
+                    var hungPids = hung.Select(p => p.Id).ToList();
+                    return Task.FromResult(HandleHungProcesses(rule, hungPids, cleanName));
+                }
             }
 
             _backoff.Reset(rule.Name);
@@ -116,11 +121,27 @@ public class ProcessMonitor : PollingMonitorBase
     }
 
     /// <summary>
-    /// 强杀无响应进程并重启。结果文案只在真正拉起成功时才说“已重启”，
-    /// 避免退避熔断或去重挡住拉起时谎报成功。
+    /// 无响应进程的**唯一**处理入口：先过门禁（AllowLaunch / FilePath），再按退避与去重
+    /// 决定是否强杀并重启。杀进程与拉起通过委托注入，测试可覆盖整条决策路径，
+    /// 不必依赖真实的无响应窗口进程。
     /// </summary>
-    private MonitorResult RestartHung(ProcessRule rule, List<Process> hung, string cleanName)
+    /// <param name="kill">结束单个进程，返回是否已成功退出；默认按进程树强杀。</param>
+    /// <param name="start">拉起动作，默认走 <see cref="StartProcess"/>。</param>
+    internal MonitorResult HandleHungProcesses(
+        ProcessRule rule,
+        IReadOnlyList<int> hungPids,
+        string cleanName,
+        Func<int, bool>? kill = null,
+        Func<ProcessRule, StartOutcome>? start = null)
     {
+        // 门禁必须在动杀之前：禁用拉起时杀完没人拉起来，等于亲手制造故障。
+        var blocked = HungRestartBlockReason(rule);
+        if (blocked is not null)
+            return MonitorResult.Unhealthy($"进程 {cleanName} 无响应{blocked}");
+
+        var killOne = kill ?? KillProcessTree;
+        var startOne = start ?? StartProcess;
+
         if (!_backoff.TryClaim(rule.Name, BackoffBaseMinutes(rule), out var fused))
         {
             return fused
@@ -135,19 +156,11 @@ public class ProcessMonitor : PollingMonitorBase
         }
 
         var stillRunning = 0;
-        foreach (var p in hung)
+        foreach (var pid in hungPids)
         {
-            Logger.LogWarning("进程 {Name} (PID {Pid}) 无响应，强制结束", cleanName, p.Id);
-            try
-            {
-                p.Kill(entireProcessTree: true);
-                if (!p.WaitForExit(5000))
-                    stillRunning++;
-            }
-            catch
-            {
-                // 进程可能在结束前已自行退出
-            }
+            Logger.LogWarning("进程 {Name} (PID {Pid}) 无响应，强制结束", cleanName, pid);
+            if (!killOne(pid))
+                stillRunning++;
         }
 
         // 旧实例没死就再拉一个，等于制造双实例；宁可放弃本轮重启。
@@ -157,15 +170,31 @@ public class ProcessMonitor : PollingMonitorBase
                 $"进程 {cleanName} 无响应，{stillRunning} 个实例在 5 秒内未退出，已跳过重启以避免双实例");
         }
 
-        return StartProcess(rule) switch
+        return startOne(rule) switch
         {
             StartOutcome.Started => MonitorResult.Unhealthy(
-                $"进程 {cleanName} 无响应，已强杀并重启 {hung.Count} 个实例"),
+                $"进程 {cleanName} 无响应，已强杀并重启 {hungPids.Count} 个实例"),
             _ => MonitorResult.Unhealthy($"进程 {cleanName} 无响应，已强杀但拉起失败，需人工介入")
         };
     }
 
-    private enum StartOutcome { Started, Deduped, Failed, NotConfigured, Disabled, Fused, BackingOff }
+    /// <summary>按进程树强杀；进程已退出视为成功。</summary>
+    private static bool KillProcessTree(int pid)
+    {
+        try
+        {
+            using var p = Process.GetProcessById(pid);
+            p.Kill(entireProcessTree: true);
+            return p.WaitForExit(5000);
+        }
+        catch
+        {
+            // 进程可能在结束前已自行退出
+            return true;
+        }
+    }
+
+    internal enum StartOutcome { Started, Deduped, Failed, NotConfigured, Disabled, Fused, BackingOff }
 
     private StartOutcome TryStart(ProcessRule rule)
     {

@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using Microsoft.Extensions.Logging.Abstractions;
 using NightWatch.Models;
 using NightWatch.Monitoring;
+using NightWatch.Notification;
 using Xunit;
 
 namespace NightWatch.Tests;
@@ -125,5 +127,141 @@ public class ProcessLaunchTests
         var b = ProcessLaunchCoordinator.MakeKey(@"d:\apps\myapp\MYAPP.EXE", "other-name");
 
         Assert.Equal(a, b);
+    }
+}
+
+/// <summary>
+/// 回归：强杀门禁必须作用在**真实处理路径**上，而不只是门禁函数本身。
+/// 之前的实现只在测试里调用了 HungRestartBlockReason，生产路径直接杀进程再 StartProcess，
+/// 导致 AllowLaunch=false 时既杀掉又重启（比修复前更糟）。这里通过注入 kill/start 覆盖整条路径。
+/// </summary>
+public class HungRestartPathTests
+{
+    private const string ExePath = @"D:\apps\myapp\myapp.exe";
+
+    private static ProcessMonitor NewMonitor(ProcessRule rule) =>
+        new(new WatchDogOptions { Processes = [rule] },
+            new ProcessLaunchCoordinator(),
+            new NoopNotifier(),
+            NullLogger<ProcessMonitor>.Instance);
+
+    private static ProcessRule NewRule(bool allowLaunch = true, string? filePath = ExePath) => new()
+    {
+        Name = "app",
+        ProcessName = "myapp",
+        FilePath = filePath,
+        AllowLaunch = allowLaunch,
+        RestartIfNotResponding = true
+    };
+
+    [Fact]
+    public void LaunchDisabled_DoesNotKillOrStart()
+    {
+        var rule = NewRule(allowLaunch: false);
+        var monitor = NewMonitor(rule);
+        var kills = 0;
+        var starts = 0;
+
+        var result = monitor.HandleHungProcesses(rule, [101], "myapp",
+            kill: _ => { kills++; return true; },
+            start: _ => { starts++; return ProcessMonitor.StartOutcome.Started; });
+
+        Assert.False(result.IsHealthy);
+        Assert.Contains("已禁用自动拉起", result.Message);
+        Assert.Contains("不结束进程", result.Message);
+        Assert.Equal(0, kills);
+        Assert.Equal(0, starts);
+    }
+
+    [Fact]
+    public void MissingFilePath_DoesNotKillOrStart()
+    {
+        var rule = NewRule(filePath: " ");
+        var monitor = NewMonitor(rule);
+        var kills = 0;
+        var starts = 0;
+
+        var result = monitor.HandleHungProcesses(rule, [102], "myapp",
+            kill: _ => { kills++; return true; },
+            start: _ => { starts++; return ProcessMonitor.StartOutcome.Started; });
+
+        Assert.False(result.IsHealthy);
+        Assert.Contains("未配置 FilePath", result.Message);
+        Assert.Equal(0, kills);
+        Assert.Equal(0, starts);
+    }
+
+    [Fact]
+    public void LaunchEnabled_KillsAndStarts()
+    {
+        var rule = NewRule();
+        var monitor = NewMonitor(rule);
+        var killedPids = new List<int>();
+        var starts = 0;
+
+        var result = monitor.HandleHungProcesses(rule, [103, 104], "myapp",
+            kill: pid => { killedPids.Add(pid); return true; },
+            start: _ => { starts++; return ProcessMonitor.StartOutcome.Started; });
+
+        Assert.False(result.IsHealthy);
+        Assert.Contains("已强杀并重启 2 个实例", result.Message);
+        Assert.Equal(new[] { 103, 104 }, killedPids);
+        Assert.Equal(1, starts);
+    }
+
+    [Fact]
+    public void KillFailure_SkipsStart()
+    {
+        var rule = NewRule();
+        var monitor = NewMonitor(rule);
+        var starts = 0;
+
+        var result = monitor.HandleHungProcesses(rule, [105], "myapp",
+            kill: _ => false,
+            start: _ => { starts++; return ProcessMonitor.StartOutcome.Started; });
+
+        Assert.Contains("已跳过重启以避免双实例", result.Message);
+        Assert.Equal(0, starts);
+    }
+
+    [Fact]
+    public void StartFailure_IsReportedAsFailure()
+    {
+        var rule = NewRule();
+        var monitor = NewMonitor(rule);
+
+        var result = monitor.HandleHungProcesses(rule, [106], "myapp",
+            kill: _ => true,
+            start: _ => ProcessMonitor.StartOutcome.Failed);
+
+        Assert.Contains("已强杀但拉起失败", result.Message);
+    }
+
+    [Fact]
+    public void SecondCallWithinDedupWindow_SkipsKill()
+    {
+        var rule = NewRule();
+        var monitor = NewMonitor(rule);
+        var kills = 0;
+        var starts = 0;
+
+        var first = monitor.HandleHungProcesses(rule, [107], "myapp",
+            kill: _ => { kills++; return true; },
+            start: _ => { starts++; return ProcessMonitor.StartOutcome.Started; });
+
+        var second = monitor.HandleHungProcesses(rule, [107], "myapp",
+            kill: _ => { kills++; return true; },
+            start: _ => { starts++; return ProcessMonitor.StartOutcome.Started; });
+
+        Assert.Contains("已强杀并重启", first.Message);
+        Assert.Contains("去重窗口", second.Message);
+        Assert.False(second.Notify);
+        Assert.Equal(1, kills);
+        Assert.Equal(1, starts);
+    }
+
+    private sealed class NoopNotifier : IEventNotifier
+    {
+        public Task SendAsync(AlertMessage alert, CancellationToken ct = default) => Task.CompletedTask;
     }
 }
