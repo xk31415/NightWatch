@@ -29,6 +29,27 @@ public class ProcessMonitor : PollingMonitorBase
     protected override int IntervalSeconds =>
         _rules.Count > 0 ? _rules.Min(r => Math.Max(5, r.IntervalSeconds)) : 30;
 
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        foreach (var ruleName in RulesIgnoringHungRestart(_rules, OperatingSystem.IsLinux()))
+        {
+            Logger.LogWarning(
+                "[{Monitor}] 规则 {Rule}: RestartIfNotResponding 仅在 Windows 上生效，Linux 上该规则将忽略此选项",
+                MonitorName, ruleName);
+        }
+
+        await base.ExecuteAsync(stoppingToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Linux 没有窗口消息机制，<see cref="ProcessRule.RestartIfNotResponding"/> 恒不触发；
+    /// 返回启动时需要提示“该选项被忽略”的规则名。
+    /// </summary>
+    internal static IReadOnlyList<string> RulesIgnoringHungRestart(IEnumerable<ProcessRule> rules, bool isLinux) =>
+        isLinux
+            ? rules.Where(r => r.RestartIfNotResponding).Select(r => r.Name).ToList()
+            : Array.Empty<string>();
+
     protected override async Task CheckAllAsync(CancellationToken ct)
     {
         foreach (var rule in _rules)
