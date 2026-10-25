@@ -37,14 +37,32 @@ if (args.Contains("--test-notify"))
         msg = testConfig["test-message"];
     if (string.IsNullOrWhiteSpace(msg))
         msg = "这是一条测试消息，收到即说明通知通道配置正确。";
-    await notifier.SendAsync(new AlertMessage
+    var result = await notifier.SendWithResultAsync(new AlertMessage
     {
         Title = "通知通道自测",
         Body = msg,
         IsWarning = false,
         Time = DateTime.Now
     });
-    consoleFactory.CreateLogger("Test").LogInformation("测试消息已发送至所有配置通道，请到对应群/邮箱确认。");
+
+    var testLog = consoleFactory.CreateLogger("Test");
+    if (result.Total == 0)
+    {
+        testLog.LogError("没有可用的通知通道：请检查 WatchDog:Notify:Channels（邮件通道还需配置 SmtpHost 与 To）");
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    if (result.Failed > 0)
+    {
+        foreach (var failure in result.Failures)
+            testLog.LogError("通道发送失败: {Failure}", failure);
+        testLog.LogError("测试消息发送完成：{Failed}/{Total} 个通道失败，请按上面的原因排查", result.Failed, result.Total);
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    testLog.LogInformation("测试消息已发送至 {Total} 个通道，请到对应群/邮箱确认。", result.Total);
     return;
 }
 
@@ -73,11 +91,17 @@ var options = builder.Configuration
     .Get<WatchDogOptions>() ?? new WatchDogOptions();
 builder.Services.AddSingleton(options);
 
-// ---- 通知器：多通道（企业微信 / 钉钉 / 邮件） ----
-builder.Services.AddSingleton<IEventNotifier>(sp =>
+// ---- 通知器：多通道（企业微信 / 钉钉 / 邮件），经有界队列异步投递 ----
+// 单通道最长可阻塞 15 秒；内联发送会拖住同一监控器下所有规则的检查，故用队列解耦。
+builder.Services.AddSingleton(sp =>
     new MultiChannelNotifier(options.Notify,
         sp.GetRequiredService<ILoggerFactory>(),
         sp.GetRequiredService<ILogger<MultiChannelNotifier>>()));
+builder.Services.AddSingleton(sp =>
+    new QueuedNotifier(sp.GetRequiredService<MultiChannelNotifier>(),
+        sp.GetRequiredService<ILogger<QueuedNotifier>>()));
+builder.Services.AddSingleton<IEventNotifier>(sp => sp.GetRequiredService<QueuedNotifier>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<QueuedNotifier>());
 
 RuleNameGuard.Normalize(options, Log.Logger);
 
