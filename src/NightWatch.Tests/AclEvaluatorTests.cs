@@ -99,6 +99,98 @@ public class AclEvaluatorTests
         Assert.True(AclEvaluator.HasBroadUserWrite(acl));
     }
 
+    /// <summary>
+    /// 回归：TrustedInstaller 是 Windows 组件与 Program Files 等目录的默认所有者。
+    /// 它不在 WellKnownSidType 里，修复前会被判成“非特权”，导致 cmd.exe / powershell.exe
+    /// 以及加固过的安装目录被误报为不可信，自动拉起被静默禁用。
+    /// </summary>
+    [Fact]
+    public void TrustedInstallerOwner_IsPrivileged()
+    {
+        var trustedInstaller = new SecurityIdentifier("S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464");
+
+        Assert.True(AclEvaluator.IsPrivilegedOwner(trustedInstaller));
+        Assert.False(AclEvaluator.IsUnprivilegedOwner(trustedInstaller));
+
+        var acl = NewAcl();
+        acl.SetOwner(trustedInstaller);
+        acl.AddAccessRule(new FileSystemAccessRule(Users, FileSystemRights.ReadAndExecute, AccessControlType.Allow));
+        Assert.False(AclEvaluator.HasBroadUserWrite(acl));
+    }
+
+    [Fact]
+    public void NtServiceOwner_IsPrivileged()
+    {
+        var serviceSid = new SecurityIdentifier("S-1-5-80-3880718306-3832830129-1677859214-2598158968-1052248003");
+
+        Assert.True(AclEvaluator.IsPrivilegedOwner(serviceSid));
+        Assert.False(AclEvaluator.IsUnprivilegedOwner(serviceSid));
+    }
+
+    [Fact]
+    public void OrdinaryUserOwner_IsStillUnprivileged()
+    {
+        // 普通本地用户 SID（S-1-5-21-…）：所有者可隐式 WRITE_DAC，仍必须判定为不可信。
+        var user = new SecurityIdentifier("S-1-5-21-1111111111-2222222222-3333333333-1001");
+
+        Assert.False(AclEvaluator.IsPrivilegedOwner(user));
+        Assert.True(AclEvaluator.IsUnprivilegedOwner(user));
+    }
+
+    [Fact]
+    public void NtServiceGroupSid_IsPrivileged()
+    {
+        // S-1-5-80 本身是 “NT SERVICE” 组，与域 SID（S-1-5-21-…）不同族
+        Assert.True(AclEvaluator.IsPrivilegedOwner(new SecurityIdentifier("S-1-5-80")));
+    }
+
+    /// <summary>
+    /// 回归：系统目录的继承项以 GENERIC_READ|GENERIC_EXECUTE（0xA0000000）存储。
+    /// 泛型位不在只读掩码里，修复前会被当成可写，导致 C:\Program Files、
+    /// C:\Windows\System32 及其下的 exe 被误判为不可信。
+    /// 注：FileSystemAccessRule 的公开构造函数不接受泛型位（真实 ACE 由内核返回），所以直接测映射函数。
+    /// </summary>
+    [Fact]
+    public void Normalize_GenericReadExecute_HasNoWriteBits()
+    {
+        var rights = AclEvaluator.Normalize(unchecked((FileSystemRights)0xA0000000));
+
+        Assert.Equal(0, (int)(rights & ~AclEvaluator.ReadOnlyMask));
+    }
+
+    [Fact]
+    public void Normalize_GenericWrite_HasWriteBits()
+    {
+        var rights = AclEvaluator.Normalize((FileSystemRights)0x40000000);
+
+        Assert.NotEqual(0, (int)(rights & ~AclEvaluator.ReadOnlyMask));
+    }
+
+    [Fact]
+    public void Normalize_GenericAll_IsFullControl()
+    {
+        Assert.Equal(FileSystemRights.FullControl, AclEvaluator.Normalize((FileSystemRights)0x10000000));
+    }
+
+    [Fact]
+    public void SystemDirectoryAclShape_IsNotWritable()
+    {
+        // 复刻 C:\Windows\System32 / C:\Program Files 的 ACE 组合：Users 只读 + 只读继承项。
+        // 继承项只存在于目录 ACL（FileSecurity 不接受继承标记），所以这里用 DirectorySecurity。
+        var acl = new DirectorySecurity();
+        acl.SetAccessRuleProtection(true, false);
+        acl.AddAccessRule(new FileSystemAccessRule(
+            Users,
+            FileSystemRights.ReadAndExecute | FileSystemRights.Synchronize,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+            PropagationFlags.InheritOnly,
+            AccessControlType.Allow));
+        acl.AddAccessRule(new FileSystemAccessRule(
+            Users, FileSystemRights.ReadAndExecute | FileSystemRights.Synchronize, AccessControlType.Allow));
+
+        Assert.False(AclEvaluator.HasBroadAceWrite(acl));
+    }
+
     private static FileSecurity NewAcl()
     {
         var acl = new FileSecurity();
