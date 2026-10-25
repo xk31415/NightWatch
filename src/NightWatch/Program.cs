@@ -30,7 +30,13 @@ if (args.Contains("--test-notify"))
     var notifier = new MultiChannelNotifier(
         testOpts.Notify, consoleFactory, consoleFactory.CreateLogger<MultiChannelNotifier>());
 
-    var msg = testConfig["test-message"] ?? "这是一条测试消息，收到即说明通知通道配置正确。";
+    // 优先手工解析 --test-message：配置系统会把 --test-notify 的下一个 token 当成它的值，
+    // 导致 `--test-notify --test-message "文案"` 取到空串。空值一律回落到默认文案。
+    var msg = CommandLineArgs.Value(args, "test-message");
+    if (string.IsNullOrWhiteSpace(msg))
+        msg = testConfig["test-message"];
+    if (string.IsNullOrWhiteSpace(msg))
+        msg = "这是一条测试消息，收到即说明通知通道配置正确。";
     await notifier.SendAsync(new AlertMessage
     {
         Title = "通知通道自测",
