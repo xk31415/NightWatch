@@ -94,9 +94,44 @@ public class HeartbeatApiService : IHostedService, IAsyncDisposable
         app.MapGet("/", () => Results.Text("NightWatch heartbeat endpoint is running."));
 
         _app = app;
-        await app.StartAsync(ct);
+        try
+        {
+            await app.StartAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // 宿主在启动过程中被要求停止，按正常取消处理
+            _app = null;
+            await DisposeAppAsync(app);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // HTTP 心跳接收端是可选项：端口被占用/绑定失败时不能抛出——否则宿主 StartAsync 失败，
+            // 进程守护、服务守护等核心监控会一起停摆，而它们才是看门狗的本职。
+            // 这里降级关闭接收端并记 ERR，其余托管服务继续运行。
+            _logger.LogError(ex,
+                "HTTP 心跳服务启动失败（监听 http://{Host}:{Port}），接收端已降级关闭，其余监控继续运行。排查端口占用后重启服务",
+                host, _options.Port);
+            _app = null;
+            await DisposeAppAsync(app);
+            return;
+        }
+
         _logger.LogInformation("HTTP 心跳服务已启动，监听 http://{Host}:{Port}。上报地址: POST http://<host>:{Port}/heartbeat/{{product}}/{{user}}",
             host, _options.Port, _options.Port);
+    }
+
+    private static async Task DisposeAppAsync(WebApplication app)
+    {
+        try
+        {
+            await app.DisposeAsync();
+        }
+        catch
+        {
+            // 启动失败后的清理失败不应影响宿主
+        }
     }
 
     public async Task StopAsync(CancellationToken ct)
