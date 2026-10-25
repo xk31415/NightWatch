@@ -47,12 +47,28 @@ internal static class MarkdownFormatter
         text.Replace("#", "\\#").Replace("*", "\\*").Replace("<", "＜").Replace(">", "＞");
 }
 
+/// <summary>
+/// 企微/钉钉共用的进程级 HttpClient。
+/// 每个通道各自 new HttpClient（或按次创建）会在长驻 Windows 服务里把套接字留在 TIME_WAIT，最终耗尽端口。
+/// <see cref="SocketsHttpHandler.PooledConnectionLifetime"/> 让连接池定期换连接，避免 DNS 变更后一直打到旧地址。
+/// 该客户端跟随进程存活，不要在单次发送后 Dispose。
+/// </summary>
+internal static class WebhookHttp
+{
+    public static HttpClient Client { get; } = new(new SocketsHttpHandler
+    {
+        PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+    })
+    {
+        Timeout = TimeSpan.FromSeconds(10)
+    };
+}
+
 /// <summary>企业微信群机器人（markdown 消息）。</summary>
 public class WeComSender : IChannelSender
 {
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 
-    private readonly HttpClient _http;
     private readonly string _webhookUrl;
 
     public string ChannelName { get; }
@@ -61,13 +77,12 @@ public class WeComSender : IChannelSender
     {
         ChannelName = string.IsNullOrWhiteSpace(channel.Name) ? "企业微信" : channel.Name;
         _webhookUrl = channel.WebhookUrl ?? throw new ArgumentException("wecom 通道缺少 WebhookUrl");
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
     }
 
     public async Task SendAsync(AlertMessage alert, CancellationToken ct = default)
     {
         var payload = new { msgtype = "markdown", markdown = new { content = MarkdownFormatter.FormatWeCom(alert) } };
-        using var resp = await _http.PostAsJsonAsync(_webhookUrl, payload, JsonOpts, ct);
+        using var resp = await WebhookHttp.Client.PostAsJsonAsync(_webhookUrl, payload, JsonOpts, ct);
         var body = await resp.Content.ReadAsStringAsync(ct);
         if (!resp.IsSuccessStatusCode || WebhookResponse.IsError(body))
             throw new InvalidOperationException($"企业微信返回异常: {(int)resp.StatusCode} {body}");
@@ -79,7 +94,6 @@ public class DingTalkSender : IChannelSender
 {
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 
-    private readonly HttpClient _http;
     private readonly string _webhookUrl;
     private readonly string? _secret;
 
@@ -90,7 +104,6 @@ public class DingTalkSender : IChannelSender
         ChannelName = string.IsNullOrWhiteSpace(channel.Name) ? "钉钉" : channel.Name;
         _webhookUrl = channel.WebhookUrl ?? throw new ArgumentException("dingtalk 通道缺少 WebhookUrl");
         _secret = channel.Secret;
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
     }
 
     public async Task SendAsync(AlertMessage alert, CancellationToken ct = default)
@@ -113,7 +126,7 @@ public class DingTalkSender : IChannelSender
                 text = MarkdownFormatter.FormatDingTalk(alert)
             }
         };
-        using var resp = await _http.PostAsJsonAsync(url, payload, JsonOpts, ct);
+        using var resp = await WebhookHttp.Client.PostAsJsonAsync(url, payload, JsonOpts, ct);
         var body = await resp.Content.ReadAsStringAsync(ct);
         if (!resp.IsSuccessStatusCode || WebhookResponse.IsError(body))
             throw new InvalidOperationException($"钉钉返回异常: {(int)resp.StatusCode} {body}");
