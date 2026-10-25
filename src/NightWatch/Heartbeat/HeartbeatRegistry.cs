@@ -22,6 +22,19 @@ public class HeartbeatRegistry
 {
     private readonly ConcurrentDictionary<string, HeartbeatEntry> _entries = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// 写入指定时间的心跳。供测试构造超时 / 保留期场景；生产路径请用 <see cref="Touch"/>。
+    /// </summary>
+    internal void Seed(string key, DateTime lastSeenUtc, string? ip, long count)
+    {
+        _entries[key] = new HeartbeatEntry
+        {
+            LastSeenUtc = lastSeenUtc,
+            LastIp = ip,
+            Count = count
+        };
+    }
+
     /// <summary>记录一次心跳上报（重复上报刷新时间并累加计数）。</summary>
     public void Touch(string product, string user, string? ip = null)
     {
