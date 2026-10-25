@@ -44,7 +44,7 @@ Windows 看门狗服务。以 LocalSystem 运行时，可监控进程、Windows 
 
 ## 架构
 
-未配置的模块不会注册。进程守护与文件心跳拉起同一可执行文件时，经去重协调器共用一次启动权。通知并行发送，单通道失败不影响其他通道。
+未配置的模块不会注册。进程守护与文件心跳拉起同一可执行文件时，经去重协调器共用一次启动权。通知进入有界队列后由后台并行发送，单通道失败不影响其他通道，也不会拖住监控检查。
 
 ```mermaid
 flowchart TB
@@ -132,7 +132,7 @@ NightWatch.exe --test-notify
 NightWatch.exe --test-notify --test-message "主机A通知通道验证"
 ```
 
-到对应群或邮箱确认能收到消息。QQ 邮箱使用 SMTP 授权码，不是登录密码；587 端口配合 `"UseSsl": false`（STARTTLS），465 配合 `"UseSsl": true`。
+到对应群或邮箱确认能收到消息。退出码可直接用于脚本判断：全部通道成功为 `0`，任一通道失败或没有可用通道为 `1`（原因逐条打印）。QQ 邮箱使用 SMTP 授权码，不是登录密码；587 端口配合 `"UseSsl": false`（STARTTLS），465 配合 `"UseSsl": true`。
 
 ### 收紧目录权限
 
@@ -382,6 +382,10 @@ while (await timer.WaitForNextTickAsync())
 netsh advfirewall firewall add rule name="NightWatch HTTP" dir=in action=allow protocol=TCP localport=5200
 ```
 
+对外监听却没配 `Token` 时，接收端会拒绝启动并记 ERR（不会裸奔），其余监控照常运行。
+
+`MaxKeys` 限制保留的动态键数量（默认 10000）：product / user 单段超过 128 字符返回 400，容量满后新键返回 429（已有键仍可刷新）。`/heartbeats` 查询同样需要 Token。
+
 动态键超过 `RetentionMinutes` 未上报会移除；仍在 `Expected` 中的键按「必达缺失」继续告警。
 
 端口被占用（或绑定失败）时，接收端会降级关闭并在日志记一条 `ERR`，进程/服务/资源监控仍继续运行，只是收不到 HTTP 上报；排查端口占用后重启服务即可恢复。
@@ -414,6 +418,8 @@ netsh advfirewall firewall add rule name="NightWatch HTTP" dir=in action=allow p
 | 改配置 | 编辑 `appsettings.json` 后 `sc stop` / `sc start` |
 
 改系统环境变量后必须重启服务。日志级别为 Information。每条规则的异常，以及从异常恢复，会写入文件；持续健康的轮询结果是 Debug，避免正常运行时刷屏。
+
+告警经有界队列（默认 256 条）异步投递：队列满时丢弃并记 WRN，停机时最多等 5 秒排空，避免 SMTP 超时拖住监控。恢复通知只在本次异常期间确实推送过告警时发送。
 
 ## 常见问题
 
