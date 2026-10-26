@@ -22,8 +22,9 @@ internal static class MarkdownFormatter
             ? "<font color=\"warning\">⚠️ 状态：异常告警</font>"
             : "<font color=\"info\">✅ 状态：正常（测试/恢复通知）</font>";
 
+        var headline = $"**[{NotificationConstants.Tag}] {(alert.IsWarning ? "告警通知" : "状态通知")}**";
         return FormatCommon(alert, status,
-            $"<font color=\"comment\">时间：{alert.Time:yyyy-MM-dd HH:mm:ss}</font>");
+            $"<font color=\"comment\">时间：{alert.Time:yyyy-MM-dd HH:mm:ss}</font>", headline);
     }
 
     public static string FormatDingTalk(AlertMessage alert)
@@ -32,17 +33,37 @@ internal static class MarkdownFormatter
             ? "**⚠️ 状态：异常告警**"
             : "**✅ 状态：正常（测试/恢复通知）**";
 
-        return FormatCommon(alert, status, $"时间：{alert.Time:yyyy-MM-dd HH:mm:ss}");
+        // 钉钉 PC 端 ### 过大、纯加粗在手机端又不够醒目：四级标题折中。
+        var headline = $"#### [{NotificationConstants.Tag}] {(alert.IsWarning ? "告警通知" : "状态通知")}";
+        return FormatCommon(alert, status, $"时间：{alert.Time:yyyy-MM-dd HH:mm:ss}", headline);
     }
 
-    private static string FormatCommon(AlertMessage alert, string status, string time) =>
-        $"### [{NotificationConstants.Tag}] {(alert.IsWarning ? "告警通知" : "状态通知")}\n" +
-        $"> **{Escape(alert.Title)}**\n\n" +
-        $"{Escape(alert.Body)}\n\n" +
+    private static string FormatCommon(AlertMessage alert, string status, string time, string headline)
+    {
         // 状态与时间之间必须空行：钉钉遵循标准 markdown（单个换行折叠为空格），
-        // 企业微信则宽松得多（单换行也断行），用空行两边才一致
-        $"{status}\n\n" +
-        time;
+        // 企业微信则宽松得多（单换行也断行），用空行两边才一致。
+        // 主机/IP 放在标题之前，多机共群时第一眼就能看到来源。
+        return $"{headline}\n\n" +
+               FormatHostBlock(alert) +
+               $"> **{Escape(alert.Title)}**\n\n" +
+               $"{Escape(alert.Body)}\n\n" +
+               $"{status}\n\n" +
+               time;
+    }
+
+    private static string FormatHostBlock(AlertMessage alert)
+    {
+        var lines = new List<string>();
+        if (!string.IsNullOrWhiteSpace(alert.Host))
+            lines.Add($"> **主机：{Escape(alert.Host)}**");
+        if (!string.IsNullOrWhiteSpace(alert.HostIp))
+            lines.Add($"> **IP：{Escape(alert.HostIp)}**");
+
+        // 两个独立引用块（中间空行）：引用块内单个换行会被钉钉折叠成空格（会渲染成
+        // 「主机：xxxIP：yyy」），而只在块内加空引用行又会让两行共用一个竖条、看着像连在一起。
+        // 用空行拆成两个块，钉钉/企微都各自成段、互不粘连。
+        return lines.Count == 0 ? "" : string.Join("\n\n", lines) + "\n\n";
+    }
 
     /// <summary>转义可能破坏 markdown 结构的字符，保留换行。</summary>
     private static string Escape(string text) =>
