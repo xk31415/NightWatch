@@ -439,6 +439,8 @@ Windows 用 `appsettings.example.json`，Linux 用 `appsettings.example.linux.js
 
 ```jsonc
 "Notify": {
+  // 多台机器推到同一个群时建议填写，告警正文会带「主机：xxx」；不写则用计算机名
+  "HostLabel": "交易机-A",
   "Channels": [
     {
       "Type": "wecom",
@@ -467,6 +469,8 @@ Windows 用 `appsettings.example.json`，Linux 用 `appsettings.example.linux.js
 ```
 
 钉钉机器人若启用加签，必须填 `Secret`。邮件未配 `SmtpHost` 时该通道会被跳过并记日志。各通道并行发送，互不影响。
+
+`HostLabel` 与 IP 会出现在企微/钉钉 markdown 与邮件正文：标题**之前**各占一行「主机：…」「IP：…」，多台机器同一个群时第一眼就能区分来源。未配置 `HostLabel` 时主机名用 `Environment.MachineName`。默认 `IncludeHostIp` 为 true，发送时解析本机首个可用 IPv4（带 30 秒缓存，DHCP 续租/网卡切换后不会一直推旧地址）；不需要 IP 时设 `"IncludeHostIp": false`。
 
 ### 进程守护
 

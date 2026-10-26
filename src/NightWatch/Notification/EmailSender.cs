@@ -69,20 +69,49 @@ public class EmailSender : IChannelSender
         _logger.LogInformation("告警邮件已发送至 {To}", string.Join(", ", _channel.To));
     }
 
-    private static string BuildPlainText(AlertMessage alert) => new StringBuilder()
-        .AppendLine($"[{NotificationConstants.Tag}] {(alert.IsWarning ? "异常告警" : "通知")}")
-        .AppendLine()
+    private static string BuildPlainText(AlertMessage alert)
+    {
+        var sb = new StringBuilder()
+            .AppendLine($"[{NotificationConstants.Tag}] {(alert.IsWarning ? "异常告警" : "通知")}")
+            .AppendLine();
+        if (!string.IsNullOrWhiteSpace(alert.Host))
+            sb.AppendLine($"主机: {alert.Host}");
+        if (!string.IsNullOrWhiteSpace(alert.HostIp))
+            sb.AppendLine($"IP: {alert.HostIp}");
+        return sb
         .AppendLine($"告警项: {alert.Title}")
         .AppendLine($"详情: {alert.Body}")
         .AppendLine($"状态: {(alert.IsWarning ? "异常" : "正常")}")
         .Append($"时间: {alert.Time:yyyy-MM-dd HH:mm:ss}")
         .ToString();
+    }
 
     private static string BuildHtml(AlertMessage alert)
     {
         var (statusColor, statusText, icon) = alert.IsWarning
             ? ("#d93026", "异常告警", "⚠️")
             : ("#1a7f37", "正常（测试/恢复通知）", "✅");
+
+        var hostRows = "";
+        if (!string.IsNullOrWhiteSpace(alert.Host))
+        {
+            hostRows += $"""
+        <tr>
+          <td style="padding:10px 0;color:#86909c;">主机</td>
+          <td style="padding:10px 0;font-weight:bold;">{System.Net.WebUtility.HtmlEncode(alert.Host)}</td>
+        </tr>
+""";
+        }
+
+        if (!string.IsNullOrWhiteSpace(alert.HostIp))
+        {
+            hostRows += $"""
+        <tr>
+          <td style="padding:10px 0;color:#86909c;">IP</td>
+          <td style="padding:10px 0;font-weight:bold;">{System.Net.WebUtility.HtmlEncode(alert.HostIp)}</td>
+        </tr>
+""";
+        }
 
         return $"""
 <!DOCTYPE html>
@@ -94,6 +123,7 @@ public class EmailSender : IChannelSender
     </div>
     <div style="padding:24px;">
       <table style="width:100%;border-collapse:collapse;font-size:14px;color:#1d2129;">
+        {hostRows}
         <tr>
           <td style="width:90px;padding:10px 0;color:#86909c;vertical-align:top;">告警项</td>
           <td style="padding:10px 0;font-weight:bold;">{System.Net.WebUtility.HtmlEncode(alert.Title)}</td>

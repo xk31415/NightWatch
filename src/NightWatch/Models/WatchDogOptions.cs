@@ -225,6 +225,17 @@ public class ProductStaleOverride
 /// <summary>通知配置：可同时配置多个推送通道。</summary>
 public class NotifyOptions
 {
+    /// <summary>
+    /// 告警正文里展示的主机名。多台机器共用一个群时用于区分来源。
+    /// 留空则使用 <see cref="Environment.MachineName"/>。
+    /// </summary>
+    public string? HostLabel { get; set; }
+
+    /// <summary>
+    /// 是否在告警中单独展示本机 IPv4（「IP：…」一行）。默认 true。
+    /// </summary>
+    public bool IncludeHostIp { get; set; } = true;
+
     /// <summary>推送通道列表（企业微信 / 钉钉 / 邮件可叠加）。</summary>
     public List<NotifyChannel> Channels { get; set; } = new();
 }
