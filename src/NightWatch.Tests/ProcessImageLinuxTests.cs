@@ -39,9 +39,12 @@ public class ProcessImageLinuxTests
             File.SetUnixFileMode(exe,
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
+            // 注意：不能用 bash -c "sleep 30"——bash 会把最后一条外部命令直接 exec 掉
+            // （自身被 sleep 替换），/proc/<pid>/exe 就不再指向这个长名路径。
+            // 用复合命令让 bash 自己常驻，sleep 只作为子进程。
             using var proc = Process.Start(new ProcessStartInfo(exe)
             {
-                ArgumentList = { "-c", "sleep 30" },
+                ArgumentList = { "-c", "while :; do sleep 1; done" },
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             });
