@@ -138,6 +138,8 @@ git branch -d <merged-branch>
 | Gitee 发行版「已存在」误判 | `releases/tags/{tag}` 不存在时返回 `null` 而不是 404 | 改用 `releases?per_page=50` 列表判断 |
 | Gitee 返回的中文是乱码 | PS 5.1 按 Latin-1 解码响应 | 用 `curl -o` 落盘后 `[IO.File]::ReadAllText(path, UTF8)` |
 | GitHub 资产下载连接超时 | `release-assets.githubusercontent.com` 偶发不可达 | `curl --retry 3 --connect-timeout 30` 重试 |
+| 删掉某个 tag 后，对应的 Release 也消失了 | GitHub 的 Release 绑定在 tag 上，删除 tag 会连带删除引用它的 Release（`GET /releases/tags/{tag}` 变成 404） | 换 tag 类型（lightweight ↔ annotated）时，删 tag 后**必须重建 Release 并重新上传资产**；更省事的做法是一开始就只建 annotated tag（`git tag -a`），别用 API 建 lightweight 再改 |
+| `git commit -m "..."` 报 `pathspec 'xxx' did not match any file(s)` | PS 5.1 会把提交信息里的 ASCII 双引号、甚至中文弯引号当成字符串定界符，把后半截消息拆成独立参数 | 提交信息一律写进文件再用 `git commit -F <消息文件>`，文件用无 BOM 的 UTF-8 写 |
 | 发布包里混进真实配置 | Worker SDK 默认复制 `appsettings*.json` | csproj 已排除，且有 `EnsureNoLocalConfigInPublish` 守卫会直接让发布失败 |
 
 ## 回滚
@@ -150,5 +152,7 @@ git push https://gitee.com/xk31415/NightWatch.git --delete v1.3.1
 
 # Release：GitHub 先查 id 再 DELETE /releases/{id}，gitee DELETE /releases/{id}
 ```
+
+> 删 tag 会连带删掉引用它的 GitHub Release。回滚时如果还要留发行版，先删 Release 再删 tag；反过来就会像上面「已知坑」里那条一样，得重建 Release 并重传资产。
 
 已部署实例回滚：把上一个版本的 zip 解压覆盖程序文件（保留 `appsettings.json` 与 `logs`），重启服务。
