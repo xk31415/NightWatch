@@ -35,14 +35,25 @@ public class ProcessImageLinuxTests
             File.SetUnixFileMode(exe,
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
-            using var proc = Process.Start(new ProcessStartInfo(exe) { ArgumentList = { "30" } });
+            using var proc = Process.Start(new ProcessStartInfo(exe)
+            {
+                ArgumentList = { "30" },
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            });
             Assert.NotNull(proc);
 
             // exec 失败时进程会立刻退出；明确报出来，避免误诊成进程识别逻辑的问题。
             if (proc!.WaitForExit(500))
             {
-                Assert.Fail($"复制的二进制启动后立即退出（exit={proc.ExitCode}），" +
-                            $"检查目录是否不可执行（noexec）：{dir}");
+                var err = proc.StandardError.ReadToEnd().Trim();
+                var length = new FileInfo(exe).Length;
+                var head = File.ReadAllBytes(exe);
+                var magic = head.Length >= 4
+                    ? string.Join(' ', head.Take(4).Select(b => b.ToString("X2")))
+                    : "(文件过短)";
+                Assert.Fail($"复制的二进制启动后立即退出（exit={proc.ExitCode}, {length} bytes, 文件头={magic}, " +
+                            $"源={sleep}, stderr={err}）：{dir}");
             }
 
             try
