@@ -22,7 +22,10 @@ public class ProcessImageLinuxTests
         var sleep = new[] { "/bin/sleep", "/usr/bin/sleep" }.FirstOrDefault(File.Exists);
         Assert.False(sleep is null, "找不到 sleep 可执行文件，无法构造长名进程");
 
-        var dir = Path.Combine(Path.GetTempPath(), "nw-longname-" + Guid.NewGuid().ToString("N"));
+        // 工作目录放在测试宿主的输出目录（与测试进程同一卷，必然可执行）：
+        // 部分 CI 镜像把 /tmp 挂成 noexec，复制出的二进制会 fork 成功但 exec 失败、
+        // 进程立刻退出，最终表现为“找不到进程”这种误导性的断言失败。
+        var dir = Path.Combine(AppContext.BaseDirectory, "nw-longname-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         var exe = Path.Combine(dir, "nightwatch-long-process-name");
 
@@ -34,6 +37,13 @@ public class ProcessImageLinuxTests
 
             using var proc = Process.Start(new ProcessStartInfo(exe) { ArgumentList = { "30" } });
             Assert.NotNull(proc);
+
+            // exec 失败时进程会立刻退出；明确报出来，避免误诊成进程识别逻辑的问题。
+            if (proc!.WaitForExit(500))
+            {
+                Assert.Fail($"复制的二进制启动后立即退出（exit={proc.ExitCode}），" +
+                            $"检查目录是否不可执行（noexec）：{dir}");
+            }
 
             try
             {
