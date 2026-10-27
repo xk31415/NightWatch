@@ -103,7 +103,13 @@ Invoke-RestMethod -Method Post -Headers $h -ContentType 'application/zip' -InFil
   -Assets .\NightWatch-v1.4.2-win-x64.zip, .\NightWatch-v1.4.2-linux-x64.zip
 ```
 
-令牌文件只需在重置令牌后重写一次：
+令牌文件只需在重置令牌后（或换机器 / 换 Windows 用户时）重写一次，用脚本更稳：
+
+```powershell
+.\tools\set-gitee-token.ps1      # 掩码输入 → 写文件（无 BOM、无换行）→ 收紧权限 → 调 /user 校验
+```
+
+手工写法（不想用脚本时）：
 
 ```powershell
 $dir = "$env:USERPROFILE\.nightwatch"

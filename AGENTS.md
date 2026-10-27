@@ -20,6 +20,7 @@ dotnet publish src\NightWatch\NightWatch.csproj -c Release -r win-x64 --self-con
 - **只允许「读文件 → 直接用」**：不要 `Write-Host`/日志/命令行参数打印令牌，不要写进 `appsettings*.json`，不要提交。
 - 需要把令牌带进 URL 时用 `curl --config <临时文件>`，用完删除。
 - **发 Gitee 发行版一律用脚本**，它自己读令牌：`tools/create-gitee-release.ps1 -Tag vX.Y.Z -BodyFile <file> -Assets <zip...>`（`-DryRun` 先空跑）。
+- 新机器 / 新用户 / 刚重置令牌：跑 `tools/set-gitee-token.ps1`（掩码输入 → 写文件 → 收紧权限 → 校验，只打印 login）。
 - GitHub 的凭据在 Windows 凭据管理器里（`git credential fill` 可取），Gitee 的 `git push` 用账号密码，与上面的令牌无关。
 
 ## 提交与发布
