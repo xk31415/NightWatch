@@ -90,6 +90,29 @@ Invoke-RestMethod -Method Post -Headers $h -ContentType 'application/zip' -InFil
 
 ## 5. Gitee Release
 
+**推荐直接用脚本**：`tools/create-gitee-release.ps1`（令牌从 `%USERPROFILE%\.nightwatch\gitee-token` 或 `-TokenFile` / 环境变量 `GITEE_TOKEN` 读取，不进命令行与日志；发行版已存在则复用、同名资产跳过；最后打印各资产 SHA256 供回验）。
+
+```powershell
+# 改完令牌文件后先空跑，确认 tag / 正文 / 资产路径
+.\tools\create-gitee-release.ps1 -Tag v1.4.2 -Name "v1.4.2 — 主题" `
+  -BodyFile .\release-notes.md `
+  -Assets .\NightWatch-v1.4.2-win-x64.zip, .\NightWatch-v1.4.2-linux-x64.zip -DryRun
+
+# 确认无误后正式执行（重复执行安全）
+.\tools\create-gitee-release.ps1 -Tag v1.4.2 -BodyFile .\release-notes.md `
+  -Assets .\NightWatch-v1.4.2-win-x64.zip, .\NightWatch-v1.4.2-linux-x64.zip
+```
+
+令牌文件只需在重置令牌后重写一次：
+
+```powershell
+$dir = "$env:USERPROFILE\.nightwatch"
+New-Item -ItemType Directory -Force $dir | Out-Null
+Set-Content "$dir\gitee-token" "你的新令牌" -NoNewline -Encoding ascii
+```
+
+手工调 API 的做法（脚本不可用时）：
+
 ```powershell
 $base = 'https://gitee.com/api/v5/repos/xk31415/NightWatch'
 # 1) 先看列表判断是否已存在——releases/tags/{tag} 不存在时返回 null，不要用真值判断
