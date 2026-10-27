@@ -33,11 +33,12 @@ public class AlertHostLabelTests
         Assert.Contains("**IP：192.168.2.127**", md);
         Assert.True(md.IndexOf("主机：", StringComparison.Ordinal) < md.IndexOf("IP：", StringComparison.Ordinal));
 
-        // 钉钉引用块内单个换行会折叠成空格；这里用空行拆成两个独立引用块，
-        // 既不会渲染成「主机：xxxIP：yyy」，也不会共用一个竖条看起来粘连。
-        Assert.Contains("**主机：XINGKONG-PC**\n\n> **IP：192.168.2.127**", md);
+        // 主机 / IP / 告警项在同一个引用块内，字段之间用空引用行分段：
+        // 单个换行会被钉钉折叠成空格（曾渲染成「主机：xxxIP：yyy」），
+        // 拆成多个引用块又会在字段间留出大段空白。
+        Assert.Contains("**主机：XINGKONG-PC**\n>\n> **IP：192.168.2.127**\n>\n> **通知通道自测**", md);
         Assert.DoesNotContain("PCIP", md);
-        Assert.DoesNotContain("**\n>\n> **", md);
+        Assert.DoesNotContain("**主机：XINGKONG-PC**\n\n> **IP", md);
     }
 
     [Fact]
