@@ -69,22 +69,29 @@ function Get-ResponseFile {
     Join-Path $env:TEMP ("gitee-" + [guid]::NewGuid().ToString('N') + ".json")
 }
 
+# 容错：去掉 BOM、首尾空白，以及可能被一起复制的引号
+# （PS 5.1 的 Set-Content -Encoding utf8 会写 BOM，而 Trim() 不去 BOM，带 BOM 的令牌会 401）
+function Read-TokenFile([string]$Path) {
+    $raw = [System.IO.File]::ReadAllText($Path)
+    return $raw.Trim().TrimStart([char]0xFEFF).Trim().Trim('"', "'").Trim()
+}
+
 # ---------- 1. 令牌 ----------
 $token = $null
 $tokenSource = $null
 if ($TokenFile) {
     if (-not (Test-Path $TokenFile)) { Fail "找不到令牌文件: $TokenFile" }
-    $token = ([System.IO.File]::ReadAllText($TokenFile)).Trim()
+    $token = Read-TokenFile $TokenFile
     $tokenSource = $TokenFile
 }
 elseif ($env:GITEE_TOKEN) {
-    $token = $env:GITEE_TOKEN.Trim()
+    $token = $env:GITEE_TOKEN.Trim().TrimStart([char]0xFEFF).Trim().Trim('"', "'").Trim()
     $tokenSource = '环境变量 GITEE_TOKEN'
 }
 else {
     $defaultPath = Join-Path $env:USERPROFILE '.nightwatch\gitee-token'
     if (Test-Path $defaultPath) {
-        $token = ([System.IO.File]::ReadAllText($defaultPath)).Trim()
+        $token = Read-TokenFile $defaultPath
         $tokenSource = $defaultPath
     }
 }
