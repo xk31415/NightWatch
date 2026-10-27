@@ -243,11 +243,26 @@ try {
     Write-Step ("发行版已就绪: {0}" -f $Tag)
     Write-Host ("  id       : {0}" -f $rel.id)
     Write-Host ("  标题     : {0}" -f $rel.name)
-    Write-Host ("  资产     : {0} 个" -f @($rel.assets).Count)
-    foreach ($a in $rel.assets) { Write-Host ("    - {0}  {1:N1} KB" -f $a.name, ($a.size / 1KB)) }
-    Write-Host ''
-    Write-Host '本地文件校验值（发布说明里建议照抄）:'
-    foreach ($x in $uploaded) { Write-Host ("  {0}`n    SHA256 {1}" -f $x.Name, $x.Sha) }
+    $remoteAssets = @($rel.assets)
+    Write-Host ("  资产     : {0} 个" -f $remoteAssets.Count)
+    # 注意：Gitee 的 release.assets 只有 name 与 browser_download_url，没有 size 字段
+    foreach ($a in $remoteAssets) { Write-Host ("    - {0}" -f $a.name) }
+
+    # 期望的资产（本次传给 -Assets 的文件）必须都在远端
+    $remoteNames = @($remoteAssets | ForEach-Object { $_.name })
+    $missing = @($assetList | Where-Object { $remoteNames -notcontains $_.Name })
+    if ($missing.Count -gt 0) {
+        Write-Host ("  缺失资产 : {0}" -f (($missing | ForEach-Object { $_.Name }) -join ', ')) -ForegroundColor Yellow
+    }
+
+    if ($uploaded.Count -gt 0) {
+        Write-Host ''
+        Write-Host '本地文件校验值（发布说明里建议照抄）:'
+        foreach ($x in $uploaded) {
+            Write-Host ("  {0}  {1:N0} 字节" -f $x.Name, $x.Size)
+            Write-Host ("    SHA256 {0}" -f $x.Sha)
+        }
+    }
     Write-Host ''
     Write-Host ("发行版页面: https://gitee.com/{0}/releases/tag/{1}" -f $Repo, $Tag)
 }
