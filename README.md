@@ -202,7 +202,9 @@ dir D:\NightWatch\logs
 
 日志在安装目录 `logs\nightwatch-*.log`，按天滚动，保留 30 天。启动横幅会打印已加载的规则数量和通知通道。
 
-若自检禁用了拉起，日志中有 `[安全自检]`，告警也会带 `icacls` 示例。收紧权限后重启服务即可恢复拉起。
+若自检禁用了拉起，会收到标题为「部署安全自检未通过，相关自动拉起已禁用」的告警（正文含 `icacls` 加固示例），此后结果消息里带「安全自检已禁用自动拉起，仅告警」。收紧权限后重启服务即可恢复拉起。
+
+完整的部署后核对项（服务状态、告警通路、观察周期、失败对照表）见 `docs/post-deploy-checks.md`。
 
 ### 更新
 
@@ -711,7 +713,7 @@ dotnet run --project src\NightWatch
 dotnet test src\NightWatch.Tests
 ```
 
-发布流程（版本号、打 tag、双平台 Release、制品校验与回滚）见 `docs/release-checklist.md`；踩过的坑与检查清单见 `docs/lessons-learned.md`。
+发布流程（版本号、打 tag、双平台 Release、制品校验与回滚）见 `docs/release-checklist.md`；踩过的坑与检查清单见 `docs/lessons-learned.md`；部署后的核对项见 `docs/post-deploy-checks.md`。
 
 Linux / macOS 上同样的命令（开发主要在 Windows 进行，但代码可在任意平台编译测试）。
 

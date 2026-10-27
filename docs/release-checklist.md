@@ -125,6 +125,7 @@ git branch -d <merged-branch>
 - 如果 Gitee 令牌出现在聊天记录或脚本里，去 **Gitee → 设置 → 私人令牌** 删除重建。
 - 更新部署记录（版本、制品、SHA256、升级时间），见 `docs/deploy-2026-10-25.md` 的格式。
 - 已部署实例升级：Windows 覆盖程序文件即可；Linux 解压后记得 `chmod +x`。
+- 部署/升级完成后按 [post-deploy-checks.md](post-deploy-checks.md) 逐项核对（服务状态、告警通路、观察一个完整周期）。
 
 ## 已知坑（都是实测踩过的）
 
