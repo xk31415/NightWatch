@@ -711,7 +711,7 @@ dotnet run --project src\NightWatch
 dotnet test src\NightWatch.Tests
 ```
 
-发布流程（版本号、打 tag、双平台 Release、制品校验与回滚）见 `docs/release-checklist.md`。
+发布流程（版本号、打 tag、双平台 Release、制品校验与回滚）见 `docs/release-checklist.md`；踩过的坑与检查清单见 `docs/lessons-learned.md`。
 
 Linux / macOS 上同样的命令（开发主要在 Windows 进行，但代码可在任意平台编译测试）。
 
