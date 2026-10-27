@@ -42,27 +42,28 @@ internal static class MarkdownFormatter
     {
         // 状态与时间之间必须空行：钉钉遵循标准 markdown（单个换行折叠为空格），
         // 企业微信则宽松得多（单换行也断行），用空行两边才一致。
-        // 主机/IP 放在标题之前，多机共群时第一眼就能看到来源。
         return $"{headline}\n\n" +
-               FormatHostBlock(alert) +
-               $"> **{Escape(alert.Title)}**\n\n" +
+               FormatHeaderBlock(alert) +
                $"{Escape(alert.Body)}\n\n" +
                $"{status}\n\n" +
                time;
     }
 
-    private static string FormatHostBlock(AlertMessage alert)
+    /// <summary>
+    /// 顶部信息块：主机、IP、告警项放在**同一个**引用块里（一个连续竖条，字段之间用空引用行分段）。
+    /// 拆成多个引用块会在字段之间留出大段空白，看起来像一条条独立消息；
+    /// 而字段之间只用单个换行又会被钉钉折叠成空格（渲染成「主机：xxxIP：yyy」）。
+    /// </summary>
+    private static string FormatHeaderBlock(AlertMessage alert)
     {
         var lines = new List<string>();
         if (!string.IsNullOrWhiteSpace(alert.Host))
             lines.Add($"> **主机：{Escape(alert.Host)}**");
         if (!string.IsNullOrWhiteSpace(alert.HostIp))
             lines.Add($"> **IP：{Escape(alert.HostIp)}**");
+        lines.Add($"> **{Escape(alert.Title)}**");
 
-        // 两个独立引用块（中间空行）：引用块内单个换行会被钉钉折叠成空格（会渲染成
-        // 「主机：xxxIP：yyy」），而只在块内加空引用行又会让两行共用一个竖条、看着像连在一起。
-        // 用空行拆成两个块，钉钉/企微都各自成段、互不粘连。
-        return lines.Count == 0 ? "" : string.Join("\n\n", lines) + "\n\n";
+        return string.Join("\n>\n", lines) + "\n\n";
     }
 
     /// <summary>转义可能破坏 markdown 结构的字符，保留换行。</summary>
