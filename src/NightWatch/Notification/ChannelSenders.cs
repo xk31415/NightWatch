@@ -52,9 +52,24 @@ internal static class MarkdownFormatter
         // 企业微信则宽松得多（单换行也断行），用空行两边才一致。
         return $"{headline}\n\n" +
                FormatHeaderBlock(alert) +
-               $"{Escape(alert.Body)}\n\n" +
+               $"{FormatBody(alert.Body)}\n\n" +
                $"{status}\n\n" +
                time;
+    }
+
+    /// <summary>
+    /// 正文按行转成空行分隔：钉钉把单个换行折叠成空格，只有空行才稳定断行；
+    /// 企业微信两种都断行，所以两个通道统一用空行。
+    /// 顺带清掉行尾空白与空行，避免截断预算被空白吃掉。
+    /// </summary>
+    private static string FormatBody(string body)
+    {
+        var normalized = body.Replace("\r\n", "\n").Replace('\r', '\n');
+        return string.Join("\n\n", normalized
+            .Split('\n')
+            .Select(line => line.TrimEnd())
+            .Where(line => line.Length > 0)
+            .Select(Escape));
     }
 
     /// <summary>
@@ -66,17 +81,70 @@ internal static class MarkdownFormatter
     {
         var lines = new List<string>();
         if (!string.IsNullOrWhiteSpace(alert.Host))
-            lines.Add($"> **主机：{Escape(alert.Host)}**");
+            lines.Add($"> **主机：{Escape(SanitizeSingleLine(alert.Host))}**");
         if (!string.IsNullOrWhiteSpace(alert.HostIp))
-            lines.Add($"> **IP：{Escape(alert.HostIp)}**");
-        lines.Add($"> **{Escape(alert.Title)}**");
+            lines.Add($"> **IP：{Escape(SanitizeSingleLine(alert.HostIp))}**");
+        lines.Add($"> **{Escape(SanitizeSingleLine(alert.Title))}**");
 
         return string.Join("\n>\n", lines) + "\n\n";
     }
 
-    /// <summary>转义可能破坏 markdown 结构的字符，保留换行。</summary>
-    private static string Escape(string text) =>
-        text.Replace("#", "\\#").Replace("*", "\\*").Replace("<", "＜").Replace(">", "＞");
+    /// <summary>Title/Host/HostIp 这类单行字段：换行替换成空格，避免把内容带出引用块。</summary>
+    private static string SanitizeSingleLine(string text) =>
+        text.Replace("\r\n", " ").Replace('\r', ' ').Replace('\n', ' ').Trim();
+
+    /// <summary>
+    /// 转义可能破坏 markdown 结构的字符，保留换行。
+    /// 反斜杠必须最先自身转义：否则后面插入的 `\` 会被二次转义（输入 `\*` 会变成 `\\*`，`*` 反而重新生效）。
+    /// 行首列表标记（`- `、`+ `、`1. `、`1) `）单独按行处理。
+    /// </summary>
+    private static string Escape(string text)
+    {
+        var escaped = text
+            .Replace("\\", "\\\\")
+            .Replace("#", "\\#")
+            .Replace("*", "\\*")
+            .Replace("`", "\\`")
+            .Replace("_", "\\_")
+            .Replace("~", "\\~")
+            .Replace("|", "\\|")
+            .Replace("[", "\\[")
+            .Replace("]", "\\]")
+            .Replace("<", "＜")
+            .Replace(">", "＞");
+
+        return EscapeLineStartMarkers(escaped);
+    }
+
+    private static string EscapeLineStartMarkers(string text)
+    {
+        var lines = text.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+            lines[i] = EscapeLineStartMarker(lines[i]);
+        return string.Join('\n', lines);
+    }
+
+    private static string EscapeLineStartMarker(string line)
+    {
+        var indent = 0;
+        while (indent < line.Length && line[indent] == ' ')
+            indent++;
+        if (indent >= line.Length)
+            return line;
+
+        var content = line[indent..];
+        if (content.Length >= 2 && content[0] is '-' or '+' && content[1] == ' ')
+            return $"{line[..indent]}\\{content}";
+
+        var digits = 0;
+        while (digits < content.Length && char.IsAsciiDigit(content[digits]))
+            digits++;
+        if (digits > 0 && digits + 1 < content.Length
+            && content[digits] is '.' or ')' && content[digits + 1] == ' ')
+            return $"{line[..indent]}{content[..digits]}\\{content[digits..]}";
+
+        return line;
+    }
 }
 
 /// <summary>

@@ -38,9 +38,20 @@ public class MultiChannelNotifier : IEventNotifier
         _hostIpCache = options.IncludeHostIp ? new HostIpCache() : null;
         (_senders, _skipped) = BuildSenders(options, loggerFactory, logger);
 
-        logger.LogInformation("已启用 {Count} 个通知通道: {Channels}；告警主机 {Host}，IP {IpMode}",
-            _senders.Count, string.Join(", ", _senders.Select(s => s.ChannelName)), _hostName,
-            _hostIpCache is null ? "不附带" : "发送时解析");
+        // 启动可见性：默认 IncludeHostIp=true 会把本机 IP 推到外部群，日志必须说清
+        // 「会附什么、怎么关」，避免部署后才发现内网地址出现在群里。
+        if (_hostIpCache is null)
+        {
+            logger.LogInformation(
+                "已启用 {Count} 个通知通道: {Channels}；告警主机 {Host}；不附加本机 IP（Notify.IncludeHostIp=false）",
+                _senders.Count, string.Join(", ", _senders.Select(s => s.ChannelName)), _hostName);
+        }
+        else
+        {
+            logger.LogInformation(
+                "已启用 {Count} 个通知通道: {Channels}；告警主机 {Host}；将附加本机 IP（多网卡优先取有默认网关的物理网卡）；如需关闭请设 Notify.IncludeHostIp=false",
+                _senders.Count, string.Join(", ", _senders.Select(s => s.ChannelName)), _hostName);
+        }
 
         if (_skipped.Count > 0)
         {

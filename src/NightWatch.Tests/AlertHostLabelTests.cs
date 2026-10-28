@@ -1,4 +1,6 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using NightWatch.Models;
 using NightWatch.Notification;
 using Xunit;
 
@@ -236,6 +238,132 @@ public class AlertHostLabelTests
 
         Assert.Equal(shortContent, MarkdownLimit.Truncate(shortContent, MarkdownLimit.WebhookMaxBytes));
         Assert.DoesNotContain("已截断", MarkdownLimit.Truncate(shortContent, MarkdownLimit.WebhookMaxBytes));
+    }
+
+    /// <summary>
+    /// Escape 完整性：反斜杠先自身转义，链接/强调/代码/表格/删除线语法都被转义，
+    /// 避免正文里的 markdown 片段变成可点击链接或吞掉后续排版的代码块。
+    /// </summary>
+    [Fact]
+    public void MarkdownEscape_CoversBackslashAndStructureCharacters()
+    {
+        var md = MarkdownFormatter.FormatDingTalk(new AlertMessage
+        {
+            Title = "转义验证",
+            Body = @"反斜杠 \* 与 [x](url) 与 _x_ 与 `code` 与 a|b 与 ~x~",
+            IsWarning = false
+        });
+
+        Assert.Contains(@"\\\*", md, StringComparison.Ordinal);   // \ 先转义，\* 不再变强调
+        Assert.Contains(@"\[x\](url)", md, StringComparison.Ordinal);
+        Assert.DoesNotContain("[x](url)", md, StringComparison.Ordinal); // 不能被渲染成链接
+        Assert.Contains(@"\_x\_", md, StringComparison.Ordinal);
+        Assert.DoesNotContain("_x_", md, StringComparison.Ordinal);
+        Assert.Contains(@"\`code\`", md, StringComparison.Ordinal);
+        Assert.Contains(@"a\|b", md, StringComparison.Ordinal);
+        Assert.Contains(@"\~x\~", md, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MarkdownEscape_EscapesLineStartListMarkers()
+    {
+        var md = MarkdownFormatter.FormatDingTalk(new AlertMessage
+        {
+            Title = "列表转义",
+            Body = "- 第一项\n1. 第二项\n+ 第三项\n      - 缩进项",
+            IsWarning = true
+        });
+
+        Assert.Contains(@"\- 第一项", md, StringComparison.Ordinal);
+        Assert.Contains(@"1\. 第二项", md, StringComparison.Ordinal);
+        Assert.Contains(@"\+ 第三项", md, StringComparison.Ordinal);
+        Assert.Contains(@"      \- 缩进项", md, StringComparison.Ordinal);
+    }
+
+    /// <summary>钉钉把单个换行折叠成空格：正文行之间必须插空行，3 行正文不能被连成一行。</summary>
+    [Fact]
+    public void DingTalkMarkdown_MultiLineBody_IsNotFoldedIntoOneLine()
+    {
+        var md = MarkdownFormatter.FormatDingTalk(new AlertMessage
+        {
+            Title = "多行正文",
+            Body = "第一行\n第二行\n第三行",
+            IsWarning = true
+        });
+
+        Assert.Contains("第一行\n\n第二行\n\n第三行", md, StringComparison.Ordinal);
+        Assert.DoesNotContain("第一行\n第二行", md, StringComparison.Ordinal);
+    }
+
+    /// <summary>Title/Host/HostIp 里的换行不能把内容带出引用块（否则后续行变成顶层 markdown）。</summary>
+    [Fact]
+    public void HeaderFields_WithNewlines_StayInsideQuoteBlock()
+    {
+        var md = MarkdownFormatter.FormatDingTalk(new AlertMessage
+        {
+            Host = "host-a\n> 注入行",
+            HostIp = "10.0.0.5\r\n第二行",
+            Title = "标题\n- 注入列表",
+            Body = "正文",
+            IsWarning = true
+        });
+
+        var quoteLines = md.Split('\n')
+            .Where(line => line.StartsWith("> ", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.Equal(3, quoteLines.Count); // 主机、IP、告警项各一行，换行没有跑出引用块
+        Assert.Contains("注入行", quoteLines[0], StringComparison.Ordinal);
+        Assert.Contains("第二行", quoteLines[1], StringComparison.Ordinal);
+        Assert.Contains("注入列表", quoteLines[2], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void IncludeHostIpEnabled_StartupLogMentionsIpAndHowToTurnOff()
+    {
+        var logger = new CapturingLogger<MultiChannelNotifier>();
+        _ = new MultiChannelNotifier(
+            new NotifyOptions { IncludeHostIp = true, Channels = [] },
+            NullLoggerFactory.Instance, logger);
+
+        var joined = string.Join("\n", logger.Messages);
+        Assert.Contains("将附加本机 IP", joined, StringComparison.Ordinal);
+        Assert.Contains("Notify.IncludeHostIp=false", joined, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void IncludeHostIpDisabled_StartupLogSaysNotAttached()
+    {
+        var logger = new CapturingLogger<MultiChannelNotifier>();
+        _ = new MultiChannelNotifier(
+            new NotifyOptions { IncludeHostIp = false, Channels = [] },
+            NullLoggerFactory.Instance, logger);
+
+        var joined = string.Join("\n", logger.Messages);
+        Assert.Contains("不附加本机 IP", joined, StringComparison.Ordinal);
+    }
+
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        private readonly List<string> _messages = new();
+
+        public IReadOnlyList<string> Messages
+        {
+            get
+            {
+                lock (_messages) return _messages.ToList();
+            }
+        }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            lock (_messages) _messages.Add(formatter(state, exception));
+        }
     }
 
     private static string LongBody() =>

@@ -37,6 +37,12 @@ public class HttpHeartbeatMonitor : PollingMonitorBase
         foreach (var key in _registry.RemoveStale(TimeSpan.FromMinutes(_options.RetentionMinutes)))
         {
             ForgetRule(key);
+
+            // 动态键已被清理：同步淘汰「曾上报过」标记，否则常驻服务里 _everSeen 只增不删会无界增长。
+            // Expected 键数量由配置决定（有界），保留标记才能区分「从未上报」与「超过保留期未再上报」。
+            if (!IsExpected(key))
+                _everSeen.Remove(key);
+
             Logger.LogInformation("[{Monitor}] 心跳键 {Rule} 已超过 {Retention} 分钟保留期，停止监控",
                 MonitorName, key, _options.RetentionMinutes);
         }
@@ -72,6 +78,12 @@ public class HttpHeartbeatMonitor : PollingMonitorBase
             }
         }
     }
+
+    /// <summary>测试用：当前记住「曾上报过」的键数量（动态键随清理淘汰，Expected 键有界保留）。</summary>
+    internal int TrackedKeyCount => _everSeen.Count;
+
+    private bool IsExpected(string key) =>
+        _options.Expected.Any(expected => string.Equals(expected, key, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>取某键的超时阈值：优先用产品级覆盖，否则用全局默认值。</summary>
     private double StaleFor(string key)
