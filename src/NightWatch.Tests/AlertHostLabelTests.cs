@@ -185,6 +185,63 @@ public class AlertHostLabelTests
         Assert.Equal("10.9.9.2", captured[1].HostIp);
     }
 
+    /// <summary>
+    /// 超长正文不能整条被服务端拒收：发送前按 UTF-8 字节上限截断，
+    /// 保留头部信息，并按行截断后追加「已截断 N 字节」标记。
+    /// </summary>
+    [Fact]
+    public void WeComMarkdown_TruncatesLongBody_ToByteLimit_WithMarker()
+    {
+        var body = LongBody();
+
+        var md = MarkdownFormatter.FormatWeCom(new AlertMessage
+        {
+            Host = "prod-db-01",
+            HostIp = "10.0.0.5",
+            Title = "资源监控 / system-resources",
+            Body = body,
+            IsWarning = true,
+            Time = new DateTime(2026, 10, 26, 8, 58, 33)
+        });
+
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(md) <= MarkdownLimit.WebhookMaxBytes,
+            $"截断后仍有 {System.Text.Encoding.UTF8.GetByteCount(md)} 字节");
+        Assert.Contains("已截断", md, StringComparison.Ordinal);
+        Assert.EndsWith("字节）", md, StringComparison.Ordinal);
+        Assert.Contains("主机：prod-db-01", md, StringComparison.Ordinal);
+        Assert.DoesNotContain("第400行", md, StringComparison.Ordinal); // 尾部确实被截掉
+    }
+
+    [Fact]
+    public void DingTalkMarkdown_TruncatesLongBody_ToByteLimit_WithMarker()
+    {
+        var md = MarkdownFormatter.FormatDingTalk(new AlertMessage
+        {
+            Host = "prod-db-01",
+            Title = "资源监控 / system-resources",
+            Body = LongBody(),
+            IsWarning = true,
+            Time = new DateTime(2026, 10, 26, 8, 58, 33)
+        });
+
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(md) <= MarkdownLimit.WebhookMaxBytes);
+        Assert.Contains("已截断", md, StringComparison.Ordinal);
+        Assert.EndsWith("字节）", md, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MarkdownLimit_ShortContent_IsUnchanged()
+    {
+        const string shortContent = "#### 标题\n\n正文";
+
+        Assert.Equal(shortContent, MarkdownLimit.Truncate(shortContent, MarkdownLimit.WebhookMaxBytes));
+        Assert.DoesNotContain("已截断", MarkdownLimit.Truncate(shortContent, MarkdownLimit.WebhookMaxBytes));
+    }
+
+    private static string LongBody() =>
+        string.Join("\n", Enumerable.Range(1, 400)
+            .Select(i => $"第{i}行：内存使用率 95.6% 超过阈值 95%（中文多字节用于验证不切坏字符）"));
+
     private sealed class CapturingSender : IChannelSender
     {
         private readonly List<AlertMessage> _sink;

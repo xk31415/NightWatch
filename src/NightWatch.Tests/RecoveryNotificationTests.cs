@@ -69,6 +69,33 @@ public class RecoveryNotificationTests
         Assert.False(notifier.Messages[1].IsWarning);
     }
 
+    /// <summary>
+    /// 队列满拒绝入队时不能置告警冷却：拒绝后下一轮仍应重试投递；
+    /// 且因为从未真正告警过，恢复时不能发「孤立的已恢复正常」。
+    /// </summary>
+    [Fact]
+    public async Task EnqueueRejected_DoesNotConsumeCooldown_AndSendsNoOrphanRecovery()
+    {
+        var notifier = new RejectingQueuedNotifier();
+        var monitor = new ProbeMonitor(notifier);
+
+        await monitor.Report("rule", MonitorResult.Unhealthy("down"));  // 被拒
+        await monitor.Report("rule", MonitorResult.Unhealthy("down"));  // 冷却未占用 → 再次尝试
+        Assert.Equal(2, notifier.EnqueueAttempts);
+        Assert.Empty(notifier.Messages);
+
+        await monitor.Report("rule", MonitorResult.Healthy("up"));
+        Assert.Empty(notifier.Messages); // 没有告警就没有恢复通知
+
+        // 队列恢复后：告警能入队，冷却才生效；恢复时发一次恢复通知
+        notifier.Accept = true;
+        await monitor.Report("rule", MonitorResult.Unhealthy("down"));
+        Assert.Single(notifier.Messages);
+        await monitor.Report("rule", MonitorResult.Healthy("up"));
+        Assert.Equal(2, notifier.Messages.Count);
+        Assert.Contains("已恢复正常", notifier.Messages[1].Body);
+    }
+
     private sealed class ProbeMonitor : PollingMonitorBase
     {
         public ProbeMonitor(IEventNotifier notifier)
@@ -95,6 +122,40 @@ public class RecoveryNotificationTests
             {
                 lock (_messages) return _messages.ToList();
             }
+        }
+
+        public Task SendAsync(AlertMessage alert, CancellationToken ct = default)
+        {
+            lock (_messages) _messages.Add(alert);
+            return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>模拟队列满的 QueuedNotifier：TryEnqueue 返回 false 时不投递。</summary>
+    private sealed class RejectingQueuedNotifier : IQueuedNotifier
+    {
+        private readonly List<AlertMessage> _messages = new();
+
+        public bool Accept { get; set; }
+
+        public int EnqueueAttempts { get; private set; }
+
+        public IReadOnlyList<AlertMessage> Messages
+        {
+            get
+            {
+                lock (_messages) return _messages.ToList();
+            }
+        }
+
+        public bool TryEnqueue(AlertMessage alert)
+        {
+            EnqueueAttempts++;
+            if (!Accept)
+                return false;
+
+            lock (_messages) _messages.Add(alert);
+            return true;
         }
 
         public Task SendAsync(AlertMessage alert, CancellationToken ct = default)

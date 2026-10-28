@@ -4,7 +4,8 @@ namespace NightWatch.Platform;
 
 /// <summary>
 /// Linux 权限审计：
-/// - 所有者非特权（uid 非 0 且 ≥ 1000，即普通登录用户）→ 不可信（可 chmod/替换内容）；
+/// - 所有者不是 root → 不可信（Linux 上只有 root 是特权账户；www-data=33、nginx 等 uid &lt; 1000
+///   的服务账户同样能改写自己的文件，不能当特权账户放行）；
 /// - 其他用户可写（other-write，等价 Windows 的 Everyone/Users 可写）→ 不可信。
 /// 属主组可写视为自定义部署组，放行（对应 Windows 自检只拦宽泛组、不拦 APP_DEPLOYERS）。
 /// 注意：不检测 POSIX ACL（setfacl）与属组可写，这两类写权限需人工保证。
@@ -34,12 +35,13 @@ public sealed class LinuxPermissionAuditor : IPermissionAuditor
         "chown -R root:root \"<目标目录>\" && chmod -R go-w \"<目标目录>\"";
 
     /// <summary>
-    /// 纯判定逻辑，便于单测：owner 非特权或 other 可写即不可信。
-    /// uid &lt; 1000 视为系统账户（对应 Windows 的 SYSTEM / NT SERVICE\* / TrustedInstaller）。
+    /// 纯判定逻辑，便于单测：owner 不是 root 或 other 可写即不可信。
+    /// Linux 只有 uid 0 能 chmod/替换任意文件；uid &lt; 1000 只是「系统账户」，不是特权账户
+    /// （与 Windows 侧「自定义服务账户也算非特权」的判定对齐）。
     /// </summary>
     internal static bool IsUntrusted(UnixFileMode mode, int uid)
     {
-        var ownerUnprivileged = uid != 0 && uid >= 1000;
+        var ownerUnprivileged = uid != 0;
         var worldWritable = (mode & UnixFileMode.OtherWrite) != 0;
         return ownerUnprivileged || worldWritable;
     }

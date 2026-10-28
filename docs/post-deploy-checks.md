@@ -99,6 +99,6 @@ journalctl -u nightwatch -n 60 --no-pager
 | 告警发不出，退出码 1 | Webhook 失效 / 令牌错误 / SMTP 授权码 | `--test-notify` 输出里的失败通道名 + 异常消息 |
 | 邮箱超时 | 网络/端口被拦（587/465） | 试 `UseSsl` 组合，确认出网策略 |
 | 一直「服务不存在」 | `ServiceName` 写错（Linux 要 unit 名如 `myapp.service`） | `systemctl is-active myapp.service` 手动验证 |
-| 安全自检关闭了拉起 | 目录 other 可写 / 属主是普通用户（uid ≥ 1000） | 收紧权限后重启；日志有具体路径 |
+| 安全自检关闭了拉起 | 目录 other 可写 / 属主不是 root / 任一祖先目录不可信 | `chown -R root:root` + `chmod go-w` 后重启；告警正文里有具体路径 |
 | 自检开关重启后失效 | 用了 `systemctl set-environment` | 改为 unit 里的 `Environment=`（`systemctl edit`） |
 | 日志里 CPU/内存全是 0 | 采集器未启动（阈值都为 0）或容器限制 | 配置 `CpuPercent`/`MemoryPercent`；Windows 确认性能计数器可用 |
