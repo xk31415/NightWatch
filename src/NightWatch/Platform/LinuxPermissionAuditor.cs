@@ -49,11 +49,13 @@ public sealed class LinuxPermissionAuditor : IPermissionAuditor
     /// <summary>
     /// 用 coreutils 的 stat 取属主 uid（.NET BCL 不暴露 Unix 属主 API）。
     /// 走统一的 <see cref="ProcessRunner"/>：ArgumentList 传参、15 秒超时、捕获 stderr。
+    /// <see cref="IPermissionAuditor.HasBroadUserWrite"/> 是同步接口，调用链上没有可用的取消令牌，
+    /// 这里显式用 <see cref="CancellationToken.None"/>：stat 是本地短命令，15 秒超时足够兜底。
     /// </summary>
     [SupportedOSPlatform("linux")]
     private static int GetOwnerUid(string path)
     {
-        var result = ProcessRunner.Run("stat", ["-c", "%u", path]);
+        var result = ProcessRunner.Run("stat", ["-c", "%u", path], ct: CancellationToken.None);
         if (result.ExitCode != 0)
             throw new InvalidOperationException($"stat {path} 失败（退出码 {result.ExitCode}）: {result.Stderr.Trim()}");
 

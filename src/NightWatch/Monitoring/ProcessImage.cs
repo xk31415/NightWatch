@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using NightWatch.Platform;
 
 namespace NightWatch.Monitoring;
@@ -76,12 +77,28 @@ public static class ProcessImage
     /// <summary>Linux 内核 /proc/&lt;pid&gt;/stat 的 comm 上限（含结尾 NUL 共 16 字节）。</summary>
     private const int LinuxCommLength = 15;
 
+    /// <summary>
+    /// 按内核 comm 规则截断进程名：comm 是 16 字节缓冲（留 1 字节 NUL，最多 15 字节），
+    /// 按 UTF-8 <b>字节</b>截断而不是按 char 截断——中文等多字节名字按 char 会切错长度
+    /// （例如 8 个汉字共 24 字节，char 口径不会截断，就永远匹配不上内核看到的 comm）。
+    /// 截断点落在多字节字符中间时，残字节解码为 U+FFFD，与 .NET 读取 comm 的解码结果一致。
+    /// </summary>
+    internal static string TruncateToLinuxComm(string name)
+    {
+        if (string.IsNullOrEmpty(name))
+            return name;
+
+        var bytes = Encoding.UTF8.GetBytes(name);
+        if (bytes.Length <= LinuxCommLength)
+            return name;
+
+        return Encoding.UTF8.GetString(bytes, 0, LinuxCommLength);
+    }
+
     private static List<Process> FilterByName(string name, IEnumerable<Process> candidates)
     {
         var comparison = PlatformServices.PathComparison;
-        var truncated = OperatingSystem.IsLinux() && name.Length > LinuxCommLength
-            ? name[..LinuxCommLength]
-            : null;
+        var truncated = OperatingSystem.IsLinux() ? TruncateToLinuxComm(name) : null;
 
         var matches = new List<Process>();
         foreach (var p in candidates)

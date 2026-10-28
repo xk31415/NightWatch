@@ -120,14 +120,14 @@ public class FileHeartbeatMonitorTests
 
     /// <summary>
     /// 退避熔断（连续 <see cref="RestartBackoff.MaxAttempts"/> 次无效后）：
-    /// 不再 kill / start，消息要提示需人工介入。真实退避按分钟计，用例直接播种退避状态。
+    /// 不再 kill / start，消息要提示需人工介入。真实退避按分钟计，用例直接播种退避状态（假时钟）。
     /// </summary>
     [Fact]
     public void FusedBackoff_StopsKilling_AndAsksForManualIntervention()
     {
         using var h = new Harness();
         for (var i = 0; i < RestartBackoff.MaxAttempts; i++)
-            h.Monitor.Backoff.NoteAttempt(h.Rule.Name);
+            h.Backoff.NoteAttempt(h.Rule.Name);
 
         var result = h.Check();
 
@@ -139,12 +139,31 @@ public class FileHeartbeatMonitorTests
         h.AssertDiagnosable(result);
     }
 
+    /// <summary>
+    /// 假时钟推进退避窗口：窗口内不再拉起，跨过窗口后恢复拉起资格。
+    /// 时钟注入替代了原来「用 internal Backoff 访问器播种状态 + 等真实分钟」的做法。
+    /// </summary>
+    [Fact]
+    public void BackoffWindow_ExpiresAfterClockAdvance()
+    {
+        using var h = new Harness();
+
+        Assert.True(h.Backoff.TryClaim(h.Rule.Name, StaleMinutes, out _));
+        h.Backoff.NoteAttempt(h.Rule.Name); // attempts=1 → 窗口 = StaleMinutes × 2
+
+        Assert.False(h.Backoff.TryClaim(h.Rule.Name, StaleMinutes, out _));
+
+        h.Clock.Advance(TimeSpan.FromMinutes(StaleMinutes * 2 + 1));
+        Assert.True(h.Backoff.TryClaim(h.Rule.Name, StaleMinutes, out var fused));
+        Assert.False(fused);
+    }
+
     /// <summary>心跳恢复正常：不 kill / start，并清空退避（下次失联可立即拉起）。</summary>
     [Fact]
     public void FreshHeartbeat_ReportsHealthy_AndResetsBackoff()
     {
         using var h = new Harness(stale: false);
-        h.Monitor.Backoff.NoteAttempt(h.Rule.Name);
+        h.Backoff.NoteAttempt(h.Rule.Name);
 
         var result = h.Check();
 
@@ -154,7 +173,7 @@ public class FileHeartbeatMonitorTests
         Assert.Equal(0, h.StartCalls);
 
         // Reset 后立刻可以再次领取启动权
-        Assert.True(h.Monitor.Backoff.TryClaim(h.Rule.Name, StaleMinutes, out var fused));
+        Assert.True(h.Backoff.TryClaim(h.Rule.Name, StaleMinutes, out var fused));
         Assert.False(fused);
     }
 
@@ -174,7 +193,7 @@ public class FileHeartbeatMonitorTests
         h.AssertDiagnosable(result);
 
         // 失败已计入 attempts=1，退避窗口内不允许再拉起
-        Assert.False(h.Monitor.Backoff.TryClaim(h.Rule.Name, StaleMinutes, out _));
+        Assert.False(h.Backoff.TryClaim(h.Rule.Name, StaleMinutes, out _));
     }
 
     /// <summary>被测对象 + 临时心跳文件 + 记录调用的注入点。</summary>
@@ -205,11 +224,14 @@ public class FileHeartbeatMonitorTests
             };
             configure?.Invoke(Rule);
 
+            Backoff = new RestartBackoff(Clock.Read);
+
             Monitor = new FileHeartbeatMonitor(
                 new WatchDogOptions { FileHeartbeats = [Rule] },
                 new ProcessLaunchCoordinator(),
                 new NoopNotifier(),
-                NullLogger<FileHeartbeatMonitor>.Instance);
+                NullLogger<FileHeartbeatMonitor>.Instance,
+                Backoff);
 
             // 注入点：不真的结束/启动进程，只记录调用次数
             Monitor.KillAndProbeStillRunning = (_, _) =>
@@ -230,6 +252,12 @@ public class FileHeartbeatMonitorTests
         public HeartbeatRule Rule { get; }
 
         public FileHeartbeatMonitor Monitor { get; }
+
+        /// <summary>假时钟：退避用例用它推进时间，不必等真实分钟级窗口。</summary>
+        public FakeClock Clock { get; } = new();
+
+        /// <summary>监控器实际使用的退避实例（注入同一份，测试可直接读状态）。</summary>
+        public RestartBackoff Backoff { get; }
 
         public int KillCalls { get; private set; }
 
@@ -261,6 +289,16 @@ public class FileHeartbeatMonitorTests
                 // 清理失败不影响断言结果
             }
         }
+    }
+
+    /// <summary>可控时钟：默认冻结在固定时刻，测试用 <see cref="Advance"/> 推进退避窗口。</summary>
+    private sealed class FakeClock
+    {
+        private DateTime _utcNow = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        public DateTime Read() => _utcNow;
+
+        public void Advance(TimeSpan delta) => _utcNow += delta;
     }
 
     private sealed class NoopNotifier : IEventNotifier

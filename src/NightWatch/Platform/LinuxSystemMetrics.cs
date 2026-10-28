@@ -57,6 +57,11 @@ public sealed class LinuxSystemMetrics : ISystemMetrics
         return 100.0 * busy / deltaTotal;
     }
 
+    /// <summary>
+    /// 内存使用率（%）。成功返回 [0,100]；采集失败按 0 返回——0 低于任何正阈值，等价于「本轮不告警」，
+    /// 监控循环不会因采集失败整体中断；但失败会节流打一条 Warning，避免「永远读不到」被误当成
+    /// 「内存很健康」而长期无人发现（返回值语义保持与 <see cref="ISystemMetrics"/> 一致，不改契约）。
+    /// </summary>
     public double GetMemoryUsedPercent()
     {
         try
@@ -66,23 +71,61 @@ public sealed class LinuxSystemMetrics : ISystemMetrics
             if (cgroup is not null)
                 return cgroup.Value;
 
-            var map = ReadMemInfo();
-            if (!map.TryGetValue("MemTotal", out var total) || total <= 0)
-                return 0;
+            var percent = ComputeMemInfoUsedPercent(ReadMemInfo());
+            if (percent is not null)
+                return percent.Value;
 
-            // MemAvailable 是内核对「可回收+空闲」的估算，比 MemFree 更贴近真实可用量。
-            if (map.TryGetValue("MemAvailable", out var available))
-                return 100.0 * (total - available) / total;
-
-            var free = map.GetValueOrDefault("MemFree");
-            var buffers = map.GetValueOrDefault("Buffers");
-            var cached = map.GetValueOrDefault("Cached");
-            return 100.0 * (total - free - buffers - cached) / total;
-        }
-        catch (Exception)
-        {
+            LogMemoryFailureThrottled(new InvalidOperationException("/proc/meminfo 缺少有效的 MemTotal"));
             return 0;
         }
+        catch (Exception ex)
+        {
+            LogMemoryFailureThrottled(ex);
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// 由 /proc/meminfo 计算内存使用率；MemTotal 缺失/非法时返回 null（调用方按采集失败处理）。
+    /// MemAvailable 优先；老内核没有该字段时用 MemFree+Buffers+Cached+SReclaimable 近似可回收量，
+    /// 并 clamp 到 [0,100]，避免计数异常时出现负值或超过 100。
+    /// </summary>
+    internal static double? ComputeMemInfoUsedPercent(IReadOnlyDictionary<string, long> map)
+    {
+        if (!map.TryGetValue("MemTotal", out var total) || total <= 0)
+            return null;
+
+        // MemAvailable 是内核对「可回收+空闲」的估算，比 MemFree 更贴近真实可用量。
+        if (map.TryGetValue("MemAvailable", out var available))
+            return ClampPercent(100.0 * (total - available) / total);
+
+        var free = map.GetValueOrDefault("MemFree");
+        var buffers = map.GetValueOrDefault("Buffers");
+        var cached = map.GetValueOrDefault("Cached");
+        // SReclaimable 是可直接回收的 slab 缓存；不计入会让使用率虚高（没有 MemAvailable 的老内核尤其明显）。
+        var reclaimable = map.GetValueOrDefault("SReclaimable");
+        return ClampPercent(100.0 * (total - free - buffers - cached - reclaimable) / total);
+    }
+
+    /// <summary>把百分比夹到 [0,100]。</summary>
+    internal static double ClampPercent(double percent) => Math.Clamp(percent, 0, 100);
+
+    /// <summary>采集失败日志的节流窗口：窗口内只记一条，避免每轮轮询刷屏。</summary>
+    internal static readonly TimeSpan FailureLogInterval = TimeSpan.FromMinutes(5);
+
+    private static long _lastFailureLogUtcTicks;
+
+    private static void LogMemoryFailureThrottled(Exception ex)
+    {
+        var now = DateTime.UtcNow.Ticks;
+        var last = Interlocked.Read(ref _lastFailureLogUtcTicks);
+        if (last != 0 && now - last < FailureLogInterval.Ticks)
+            return;
+        if (Interlocked.CompareExchange(ref _lastFailureLogUtcTicks, now, last) != last)
+            return;
+
+        Serilog.Log.Warning(ex, "[资源采集] 内存使用率采集失败，本轮按 0 处理（{Minutes} 分钟内不重复记录）",
+            FailureLogInterval.TotalMinutes);
     }
 
     /// <summary>/proc/stat 首行的 idle 与 total 采样。idle 含 iowait；total 不含 guest/guest_nice。</summary>
