@@ -24,7 +24,22 @@ public class FileHeartbeatMonitor : PollingMonitorBase
         _rules = options.FileHeartbeats;
         _launchGuard = launchGuard;
         _defaultSchedule = options.Schedule;
+        KillAndProbeStillRunning = DefaultKillAndProbeStillRunning;
+        StartTarget = DefaultStartTarget;
     }
+
+    /// <summary>
+    /// 结束目标进程并返回「是否仍有实例存活」。抽成委托是为了让「杀不掉就不拉起」这条门禁可测
+    /// （与 <see cref="ProcessMonitor.HandleHungProcesses"/> 同型）：默认实现走 <see cref="ProcessImage"/>，
+    /// 生产行为不变。
+    /// </summary>
+    internal Func<string?, string?, bool> KillAndProbeStillRunning { get; set; }
+
+    /// <summary>拉起目标进程，失败时抛异常由调用方转成告警。默认走 <see cref="ProcessStartInfoFactory"/> + <see cref="Process.Start(ProcessStartInfo)"/>。</summary>
+    internal Action<HeartbeatRule> StartTarget { get; set; }
+
+    /// <summary>自动拉起退避状态；测试用它构造「已熔断」场景（真实退避按分钟计，无法在用例里等出来）。</summary>
+    internal RestartBackoff Backoff => _backoff;
 
     protected override string MonitorName => "文件心跳";
     protected override int IntervalSeconds =>
@@ -45,7 +60,8 @@ public class FileHeartbeatMonitor : PollingMonitorBase
         }
     }
 
-    private MonitorResult CheckRule(HeartbeatRule rule, CancellationToken ct)
+    /// <summary>单条规则的一轮检查；<see cref="CheckAllAsync"/> 负责时段/间隔门禁，这里只做判定与处置。</summary>
+    internal MonitorResult CheckRule(HeartbeatRule rule, CancellationToken ct)
     {
         DateTime lastWrite;
         try
@@ -84,17 +100,14 @@ public class FileHeartbeatMonitor : PollingMonitorBase
                 : MonitorResult.Unhealthy(msg + "，处于重启退避中，本轮不杀进程");
         }
 
-        ProcessImage.KillTargets(cleanName, rule.FilePath, Logger);
-
-        if (ProcessImage.IsRunning(cleanName, rule.FilePath))
+        if (KillAndProbeStillRunning(cleanName, rule.FilePath))
             return MonitorResult.Unhealthy(msg + "；旧进程仍在运行（结束失败），已跳过重启避免双实例");
 
         _launchGuard.ForceBeginLaunch(ProcessLaunchCoordinator.MakeKey(rule.FilePath, rule.ProcessName));
 
         try
         {
-            var psi = ProcessStartInfoFactory.Create(rule.FilePath, rule.Arguments, workingDirectory: null);
-            using var p = Process.Start(psi);
+            StartTarget(rule);
             _backoff.NoteAttempt(rule.Name);
             Logger.LogInformation("心跳超时后已拉起 {File}", rule.FilePath);
             return MonitorResult.Unhealthy(msg + "，已重启目标进程");
@@ -105,5 +118,19 @@ public class FileHeartbeatMonitor : PollingMonitorBase
             Logger.LogError(ex, "心跳超时后拉起进程 {File} 失败", rule.FilePath);
             return MonitorResult.Unhealthy(msg + "，且重启失败");
         }
+    }
+
+    /// <summary>默认实现：按映像结束目标进程，再探测是否仍有实例存活（顺序与语义同改造前）。</summary>
+    private bool DefaultKillAndProbeStillRunning(string? cleanName, string? filePath)
+    {
+        ProcessImage.KillTargets(cleanName, filePath, Logger);
+        return ProcessImage.IsRunning(cleanName, filePath);
+    }
+
+    /// <summary>默认实现：与改造前完全一致的启动方式（<c>using var</c> 立即释放 Process 句柄）。</summary>
+    private void DefaultStartTarget(HeartbeatRule rule)
+    {
+        var psi = ProcessStartInfoFactory.Create(rule.FilePath!, rule.Arguments, workingDirectory: null);
+        using var p = Process.Start(psi);
     }
 }
