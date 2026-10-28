@@ -275,9 +275,9 @@ chown -R root:root /opt/nightwatch /opt/myapp /var/lib/myapp
 chmod -R go-w /opt/nightwatch /opt/myapp /var/lib/myapp
 ```
 
-自检只拦截「other 可写」和「普通登录用户属主（uid ≥ 1000）」。自定义属组可写（`chgrp deployers` + `g+w`）不会被禁用拉起。
+自检拦截「other 可写」和「属主不是 root」两种情况，并沿祖先目录链逐级检查到挂载点（Linux 没有 ACL 继承，`/opt`、`/srv`、`/home` 可写时其下 `root:root` 的目录仍可被整体替换）。自定义属组可写（`chgrp deployers` + `g+w`）不会被禁用拉起。
 
-注意：**不检测 POSIX ACL（`setfacl`）与属组可写**，这两类写权限需要人工保证。属主 uid ≥ 1000 一律视为不可信——安装目录务必 `chown root:root`，否则自检会关掉全部自动拉起。
+注意：**不检测 POSIX ACL（`setfacl`）与属组可写**，这两类写权限需要人工保证。只有 `root`（uid 0）属主才可信，其余用户（包括 `www-data` 这类 uid<1000 的服务账户）一律不可信——安装目录务必 `chown root:root`，否则自检会关掉全部自动拉起。
 
 #### 开启安全自检（Linux）
 
@@ -294,7 +294,7 @@ Environment=WatchDog__EnableStartupSecurityCheck=true
 
 临时验证也可以用 `systemctl set-environment WatchDog__EnableStartupSecurityCheck=true`，但它只存在于运行中的 systemd manager，**重启机器后会丢失**，安全自检会悄悄回到默认关闭——不要作为长期配置。
 
-规则与 Windows 相同：**关闭权只认环境变量或命令行**，不要写在 `appsettings.json` 里。自检开启后用权限位与属主 uid 检查：其他用户可写、属主是普通登录用户（uid ≥ 1000）、或权限读失败时，**只关闭自动拉起**，监控和告警继续。开发环境（`dotnet run`）不检查安装目录和配置文件。
+规则与 Windows 相同：**关闭权只认环境变量或命令行**，不要写在 `appsettings.json` 里。自检开启后用权限位与属主 uid 检查：其他用户可写、属主不是 root、任一祖先目录不可信、或权限读失败时，**只关闭自动拉起**，监控和告警继续。开发环境（`dotnet run`）不检查安装目录和配置文件。
 
 #### 注册 systemd 服务
 
@@ -646,7 +646,7 @@ Linux 上内存优先读 **cgroup v2** 限额（`/sys/fs/cgroup/memory.current` 
 
 **进程明明在跑，看门狗还在拉起。** 存活按映像完整路径匹配。`FilePath` 必须与进程主模块路径完全一致（Windows 含盘符、大小写不敏感；Linux 大小写敏感）。
 
-**配置了拉起却没有启动目标。** 日志里若有 `[安全自检]`，说明路径对宽泛组可写或属主不可信，拉起已被关闭。收紧权限后重启服务。`FilePath` 为空的规则本来就不会拉起。
+**配置了拉起却没有启动目标。** 若收到标题为「部署安全自检未通过」的告警（正文含具体路径与加固示例），说明路径对宽泛组可写、属主不是 root 或祖先目录不可信，拉起已被关闭。收紧权限后重启服务。`FilePath` 为空的规则本来就不会拉起。
 
 **找不到目标文件或心跳文件。** 服务工作目录不是安装目录（Windows 是 `System32`，Linux 由 unit 的 `WorkingDirectory` 决定）。所有路径写成绝对路径。
 

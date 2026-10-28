@@ -39,6 +39,13 @@ public static class PlatformServices
     public static StringComparison PathComparison =>
         OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
+    /// <summary>
+    /// 权限检查是否要沿祖先目录链向上：Linux 没有 ACL 继承，祖先目录可写就能整体替换子项，
+    /// 必须逐级查到挂载点/根；Windows 的继承 ACE 已包含在子对象自身 DACL 中，重复检查祖先反而会把
+    /// 「仅此目录可创建」这类权限误判成宽泛可写。
+    /// </summary>
+    public static bool RequiresAncestorDirectoryCheck => !OperatingSystem.IsWindows();
+
     /// <summary>加固提示文案（icacls / chown+chmod）。</summary>
     public static string HardeningHint
     {

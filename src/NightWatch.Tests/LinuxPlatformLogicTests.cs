@@ -112,7 +112,13 @@ public class LinuxPlatformLogicTests
                 UnixFileMode.OtherRead | UnixFileMode.OtherExecute, 1000, true)] // 普通用户属主
     [InlineData(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
                 UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
-                UnixFileMode.OtherRead | UnixFileMode.OtherExecute, 33, false)]  // www-data 等系统账户
+                UnixFileMode.OtherRead | UnixFileMode.OtherExecute, 33, true)]  // www-data 等系统账户：非 root 即不可信
+    [InlineData(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+                UnixFileMode.OtherRead | UnixFileMode.OtherExecute, 1, true)]   // daemon：uid<1000 也不是特权账户
+    [InlineData(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+                UnixFileMode.OtherRead | UnixFileMode.OtherExecute, 65534, true)] // nobody
     public void LinuxPermission_JudgesOwnerAndWorldWrite(UnixFileMode mode, int uid, bool expected)
     {
         Assert.Equal(expected, LinuxPermissionAuditor.IsUntrusted(mode, uid));
@@ -143,5 +149,126 @@ public class LinuxPlatformLogicTests
         Assert.Equal(ServiceUnitStatus.NotFound, SystemdServiceControl.Map("unknown", 0));
         // 正常查询（退出码 3 = 未运行）仍是 Stopped
         Assert.Equal(ServiceUnitStatus.Stopped, SystemdServiceControl.Map("inactive", 3));
+    }
+
+    // ---- systemd LoadState 兜底（systemd < 253 对不存在的 unit 只返回退出码 3） ----
+
+    [Theory]
+    [InlineData("not-found", true)]
+    [InlineData("not-found\n", true)]
+    [InlineData("  not-found  ", true)]
+    [InlineData("loaded", false)]
+    [InlineData("masked", false)]
+    [InlineData("bad-setting", false)]
+    [InlineData("", false)]
+    public void SystemdLoadState_NotFoundDetection(string output, bool expected) =>
+        Assert.Equal(expected, SystemdServiceControl.IsNotFoundLoadState(output));
+
+    /// <summary>
+    /// 老版本 systemd（&lt; 253）对不存在的 unit 只给 3 + "inactive"，与「已停止」无法区分；
+    /// 必须靠 LoadState=not-found 兜底改判，否则 unit 名写错会被当成 Stopped 而每轮尝试 systemctl start。
+    /// </summary>
+    [Theory]
+    [InlineData("not-found", 0, ServiceUnitStatus.NotFound)]
+    [InlineData("not-found\n", 0, ServiceUnitStatus.NotFound)]
+    [InlineData("loaded", 0, ServiceUnitStatus.Stopped)]
+    [InlineData("masked", 0, ServiceUnitStatus.Stopped)]
+    [InlineData("not-found", 1, ServiceUnitStatus.Stopped)] // LoadState 查询失败：保留 is-active 的结论
+    [InlineData("", 1, ServiceUnitStatus.Stopped)]
+    public void SystemdStatus_OldVersion_UsesLoadStateFallback(
+        string loadState, int loadStateExitCode, ServiceUnitStatus expected)
+    {
+        var fromIsActive = SystemdServiceControl.Map("inactive", 3);
+        Assert.Equal(ServiceUnitStatus.Stopped, fromIsActive); // 老版本对不存在/已停止都是 3
+
+        Assert.Equal(expected, SystemdServiceControl.ApplyLoadState(fromIsActive, loadState, loadStateExitCode));
+    }
+
+    // ---- systemd GetStatus 的 NotFound 兜底链路（注入 systemctl 执行器，不依赖真实 systemd） ----
+
+    private static SystemdServiceControl Control(
+        (string Stdout, int ExitCode) isActive,
+        (string Stdout, int ExitCode) loadState,
+        List<IReadOnlyList<string>>? calls = null) =>
+        new(arguments =>
+        {
+            calls?.Add(arguments);
+            return arguments[0] == "is-active"
+                ? new ProcessRunner.CommandResult(isActive.Stdout, "", isActive.ExitCode)
+                : new ProcessRunner.CommandResult(loadState.Stdout, "", loadState.ExitCode);
+        });
+
+    /// <summary>
+    /// 老版本 systemd（&lt; 253）端到端：is-active=3+"inactive" + LoadState=not-found → NotFound。
+    /// 若 GetStatus 退回「只 Map is-active」的旧逻辑，本用例会红。
+    /// </summary>
+    [Fact]
+    public void GetStatus_OldSystemd_NotfoundLoadState_MapsToNotFound()
+    {
+        var calls = new List<IReadOnlyList<string>>();
+        var control = Control(("inactive", 3), ("not-found", 0), calls);
+
+        Assert.Equal(ServiceUnitStatus.NotFound, control.GetStatus("myapp.service"));
+
+        // 兜底查询必须用 systemctl show -p LoadState --value <unit>
+        Assert.Equal(2, calls.Count);
+        Assert.Equal(new[] { "show", "-p", "LoadState", "--value", "myapp.service" }, calls[1]);
+    }
+
+    [Fact]
+    public void GetStatus_OldSystemd_LoadedLoadState_StaysStopped()
+    {
+        var control = Control(("inactive", 3), ("loaded", 0));
+        Assert.Equal(ServiceUnitStatus.Stopped, control.GetStatus("myapp.service"));
+    }
+
+    [Fact]
+    public void GetStatus_ModernSystemd_Exit4_SkipsLoadStateQuery()
+    {
+        var calls = new List<IReadOnlyList<string>>();
+        var control = Control(("inactive", 4), ("loaded", 0), calls);
+
+        Assert.Equal(ServiceUnitStatus.NotFound, control.GetStatus("myapp.service"));
+        Assert.Single(calls); // 退出码 4 已能定性，不再多起一个进程
+    }
+
+    [Fact]
+    public void GetStatus_Active_SkipsLoadStateQuery()
+    {
+        var calls = new List<IReadOnlyList<string>>();
+        var control = Control(("active", 0), ("loaded", 0), calls);
+
+        Assert.Equal(ServiceUnitStatus.Running, control.GetStatus("myapp.service"));
+        Assert.Single(calls);
+    }
+
+    [Fact]
+    public void GetStatus_LoadStateQueryFails_KeepsIsActiveResult()
+    {
+        var control = Control(("inactive", 3), ("", 1));
+        Assert.Equal(ServiceUnitStatus.Stopped, control.GetStatus("myapp.service"));
+    }
+
+    /// <summary>启动等待期间（activating）已能确定 unit 存在，不应每 500ms 多起一个 systemctl show。</summary>
+    [Fact]
+    public void GetStatus_Activating_SkipsLoadStateQuery()
+    {
+        var calls = new List<IReadOnlyList<string>>();
+        var control = Control(("activating", 3), ("loaded", 0), calls);
+
+        Assert.Equal(ServiceUnitStatus.StartPending, control.GetStatus("myapp.service"));
+        Assert.Single(calls);
+    }
+
+    /// <summary>管理命令失败必须抛出，且错误信息带退出码与 stderr（便于定位 unit 名写错/权限不足）。</summary>
+    [Fact]
+    public void Start_Failure_IncludesExitCodeAndStderr()
+    {
+        var control = new SystemdServiceControl(
+            _ => new ProcessRunner.CommandResult("", "Unit myapp.service not found.", 5));
+
+        var ex = Assert.Throws<InvalidOperationException>(() => control.Start("myapp.service"));
+        Assert.Contains("5", ex.Message);
+        Assert.Contains("not found", ex.Message);
     }
 }
