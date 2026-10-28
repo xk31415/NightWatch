@@ -23,7 +23,12 @@ git pull --ff-only
 dotnet test src\NightWatch.Tests\NightWatch.Tests.csproj -c Release
 ```
 
-参考基线（v1.3.0）：Windows 179 通过 / 2 跳过；Linux 163 通过 / 18 跳过（ACL/SID 用例自动跳过）。构建应 0 警告 0 错误。
+参考基线：两平台跑**同一套**用例，总数相同，差别只在跳过集合——Windows 跳过 `LinuxFact`（/proc 解析、真实进程名截断等），Linux 跳过 `WindowsFact`（ACL/SID、性能计数器）。因此恒有：
+
+- `Windows 通过数 = 总数 − LinuxFact 数`
+- `Linux 通过数 = 总数 − WindowsFact 数`
+
+**具体数字一律以当次 CI 输出的「测试总数 / 通过数 / 跳过数」为准，不要照抄本文档**——用例和平台专属测试会持续变化，抄数字只会换来一次误判（本分支实测：Windows 307 通过 / 6 跳过 / 总 313；Linux 需看该次 CI 输出）。构建应 0 警告 0 错误。对不上时先看是不是新增或调整了平台专属用例，别直接判成回归。
 
 ## 2. 打 tag 并推送
 
@@ -36,7 +41,7 @@ v1.3.1 — 一句话主题
 - 变更点 1
 - 变更点 2
 
-单测 181 通过。
+单测全部通过（照抄 CI 输出的数字）。
 '@
 [IO.File]::WriteAllText("$env:TEMP\nw-tag.txt", $msg, [Text.UTF8Encoding]::new($false))
 
@@ -52,7 +57,16 @@ git push https://gitee.com/xk31415/NightWatch.git main v1.3.1
 ```powershell
 $h = @{ Authorization = "token $env:GITHUB_TOKEN"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'NightWatch-Release' }
 $sha = git rev-parse HEAD
-$run = (Invoke-RestMethod "https://api.github.com/repos/xk31415/NightWatch/actions/runs?head_sha=$sha" -Headers $h).workflow_runs[0]
+
+# 必须带过滤：不过滤时 workflow_runs[0] 可能是 PR 触发的、还在跑的、甚至失败的那次 run，
+# 等于拿错制品去发布。status=success + event=push + branch=main 才是「main 上绿掉的那次」。
+$runsUrl = "https://api.github.com/repos/xk31415/NightWatch/actions/runs?head_sha=$sha&branch=main&event=push&status=success"
+$run = (Invoke-RestMethod $runsUrl -Headers $h).workflow_runs | Select-Object -First 1
+if (-not $run) { throw "没找到 $sha 上成功的 push run：先确认 CI 已绿，必要时 git fetch 后重取" }
+if ($run.conclusion -ne 'success') { throw "run $($run.id) 的 conclusion 是 $($run.conclusion)，不是 success，禁止发布" }
+if ($run.head_sha -ne $sha) { throw "run 的 head_sha（$($run.head_sha)）与本地 HEAD（$sha）不一致" }
+Write-Host "使用 run $($run.id)（$($run.head_branch) @ $($run.head_sha)，$($run.conclusion)）"
+
 $arts = (Invoke-RestMethod "https://api.github.com/repos/xk31415/NightWatch/actions/runs/$($run.id)/artifacts" -Headers $h).artifacts
 $arts | Select-Object name, @{n='MB';e={[math]::Round($_.size_in_bytes/1MB,2)}}, id
 ```
@@ -67,12 +81,24 @@ curl.exe -sSL --retry 3 --config $cfg -o "$env:TEMP\nw-linux.zip" "https://api.g
 Remove-Item $cfg
 ```
 
-校验四项，任何一项不符就别发布：
+下载后**用脚本校验**，不要再靠眼睛数条目——手工四项耗时且容易抄错（条目数还会随依赖 dll 漂移）：
 
-- 条目数（Windows 20 / Linux 21）
-- 含可执行文件（Windows `NightWatch.exe`、Linux `NightWatch`）
-- **不含** `appsettings.json` / `appsettings.Development.json`
-- 记录 SHA256（`Get-FileHash <zip> -Algorithm SHA256`）
+```powershell
+.\tools\verify-artifacts.ps1 `
+  -WinZip "$env:TEMP\nw-win.zip" -LinuxZip "$env:TEMP\nw-linux.zip" `
+  -Tag v1.4.2
+```
+
+脚本逐项检查，任何一项不符就以**退出码 1** 失败并打印是哪一项：
+
+- 根目录含可执行文件（Windows `NightWatch.exe`、Linux `NightWatch`）；
+- **不含** `appsettings.json` / `appsettings.Development.json`（`appsettings.example*.json` 是给部署者抄的模板，允许保留）；
+- 条目数与 SHA256：默认只要求条目数不低于下限（防空壳/截断 zip）并打印实际数量；要锁死就加 `-ExpectedWinEntries N -ExpectedLinuxEntries N`，依赖变化时同步更新期望值，别盲改；
+- `-Tag` 时校验该 tag 是否落在 `main` 上（`git merge-base --is-ancestor`），非主干提交直接拒发。
+
+脚本最后会打印两行「文件名 + 条目数 + SHA256」，直接抄进部署记录。
+
+> **两个平台的条目数应当一致。** 早期 Linux 制品比 Windows 多一条 `logs/nightwatch-*.log`——那是启动冒烟在 `publish/logs/` 留下的运行日志被一起打包了。CI 现在会在冒烟成功后清掉 `publish/logs`，若再看到两边条目数不一致，先查这一条。
 
 ## 4. GitHub Release
 
@@ -142,7 +168,17 @@ $rel = Invoke-RestMethod -Method Post -Uri "$base/releases" `
 
 ## 6. 回验
 
-四个下载（GitHub/Gitee × Windows/Linux）逐个算 SHA256，必须与本地一致；再用 Gitee 的 `/releases` 确认 `assets` 数量正确。
+四个下载（GitHub/Gitee × Windows/Linux）逐个算 SHA256，必须与发布前录的值一致；再用 Gitee 的 `/releases` 确认 `assets` 数量正确。
+
+```powershell
+# 对下载回来的 zip 复跑同一个脚本：内容项会再校一遍，SHA256 打在「汇总」里
+.\tools\verify-artifacts.ps1 `
+  -WinZip .\NightWatch-v1.4.2-win-x64.zip -LinuxZip .\NightWatch-v1.4.2-linux-x64.zip
+```
+
+四个 SHA256 必须**两两相同**（GitHub 与 Gitee 传的是同一份字节，本地那份就是基准）；不一致说明传输/上传出了问题，重下重传，别凑合发。
+
+> 顺带：`-CheckRemotes` 可以比对 GitHub 与 Gitee 两边 `main` 的 sha（只读公开 API，不写任何数据），发布前后各跑一次，确认「两边同 sha」这条不再靠记忆。
 
 ## 7. 收尾
 
@@ -170,7 +206,11 @@ git branch -d <merged-branch>
 | GitHub 资产下载连接超时 | `release-assets.githubusercontent.com` 偶发不可达 | `curl --retry 3 --connect-timeout 30` 重试 |
 | 删掉某个 tag 后，对应的 Release 也消失了 | GitHub 的 Release 绑定在 tag 上，删除 tag 会连带删除引用它的 Release（`GET /releases/tags/{tag}` 变成 404） | 换 tag 类型（lightweight ↔ annotated）时，删 tag 后**必须重建 Release 并重新上传资产**；更省事的做法是一开始就只建 annotated tag（`git tag -a`），别用 API 建 lightweight 再改 |
 | `git commit -m "..."` 报 `pathspec 'xxx' did not match any file(s)` | PS 5.1 会把提交信息里的 ASCII 双引号、甚至中文弯引号当成字符串定界符，把后半截消息拆成独立参数 | 提交信息一律写进文件再用 `git commit -F <消息文件>`，文件用无 BOM 的 UTF-8 写 |
-| 发布包里混进真实配置 | Worker SDK 默认复制 `appsettings*.json` | csproj 已排除，且有 `EnsureNoLocalConfigInPublish` 守卫会直接让发布失败 |
+| 发布包里混进真实配置 | Worker SDK 默认复制 `appsettings*.json` | csproj 已排除，且有 `EnsureNoLocalConfigInPublish` 守卫；CI 两平台都断言 `publish/` 不含本地配置，发布前再用 `tools/verify-artifacts.ps1` 复核 zip |
+| 取制品时拿到「错的那次 CI」 | `workflow_runs[0]` 没过滤，可能命中 PR 触发的、还在跑的、甚至失败的 run | 用 `event=push&branch=main&status=success` 过滤，并断言 `conclusion -eq 'success'` 且 `head_sha` 与本地 HEAD 一致（见第 3 节） |
+| CI 一直挂着不结束 | 某个用例或冒烟挂起，job 默认 6 小时超时 | job 已设 `timeout-minutes: 20`，测试带 `--blame-hang-timeout 120s`；失败时从 `test-results-win-x64` / `test-results-linux-x64` 产物里取 trx 与 Sequence 文件 |
+| Linux 制品比 Windows 多一条 `logs/...` | 启动冒烟把运行日志写进 `publish/logs/`，随后被一起打包 | CI 已在冒烟成功后删除 `publish/logs`；手工打包时也别把 `logs/` 塞进去 |
+| 本地 main 与远端不一致还照发 | 手抖推错、或一边推送失败 | 发布前后各跑一次 `.\tools\verify-artifacts.ps1 ... -CheckRemotes`，比对 GitHub/Gitee/本地三方 main 的 sha |
 
 ## 回滚
 
