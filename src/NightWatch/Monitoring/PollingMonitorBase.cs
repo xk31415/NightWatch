@@ -145,6 +145,8 @@ public abstract class PollingMonitorBase : BackgroundService
     /// 初次启动即为健康的规则不会推送。
     /// 恢复通知只在“本轮异常期间确实推送过告警”时发送：被去重/退避抑制、从未告警过的
     /// 短暂异常不打扰运维，但状态仍然记录，避免抑制分支把恢复通知吞掉。
+    /// 注意：告警只有在通知器「确实接受」后才占用冷却 / 记为已告警（队列满被拒时下轮重试），
+    /// 否则会出现「漏告警 + 恢复时发一条孤立的已恢复正常」。
     /// </summary>
     /// <param name="cooldown">该规则的告警冷却时间；不传则用监控器默认值。</param>
     /// <param name="suppressNotifications">
@@ -173,12 +175,17 @@ public abstract class PollingMonitorBase : BackgroundService
                 return;
             }
 
-            await _notifier.SendAsync(new AlertMessage
+            if (!await TryNotifyAsync(new AlertMessage
             {
                 Title = $"{MonitorName} / {ruleKey}",
                 Body = $"已恢复正常。{result.Message}",
                 IsWarning = false
-            }, ct);
+            }, ct))
+            {
+                Logger.LogWarning("[{Monitor}] {Rule}: 通知队列已满，恢复通知未投递（告警本身不受影响）",
+                    MonitorName, ruleKey);
+            }
+
             return;
         }
 
@@ -203,14 +210,35 @@ public abstract class PollingMonitorBase : BackgroundService
             return;
         }
 
-        _lastAlertUtc[ruleKey] = now;
-        _alertedRules.Add(ruleKey);
-        await _notifier.SendAsync(new AlertMessage
+        // 先投递、后记状态：队列满（TryNotifyAsync 返回 false）时本轮不占用冷却，
+        // 下一轮检查会重试，避免「告警没发出去、规则却静默 10 分钟」。
+        if (!await TryNotifyAsync(new AlertMessage
         {
             Title = $"{MonitorName} / {ruleKey}",
             Body = result.Message,
             IsWarning = true
-        }, ct);
+        }, ct))
+        {
+            Logger.LogWarning("[{Monitor}] {Rule}: 通知队列已满，本轮告警未投递，不占用告警冷却（下轮重试）",
+                MonitorName, ruleKey);
+            return;
+        }
+
+        _lastAlertUtc[ruleKey] = now;
+        _alertedRules.Add(ruleKey);
+    }
+
+    /// <summary>
+    /// 投递并返回「是否已被接受」：队列实现通过 <see cref="IQueuedNotifier.TryEnqueue"/>
+    /// 同步告知入队结果，其它实现（直发 / 测试替身）按已接受处理。
+    /// </summary>
+    private async Task<bool> TryNotifyAsync(AlertMessage alert, CancellationToken ct)
+    {
+        if (_notifier is IQueuedNotifier queued)
+            return queued.TryEnqueue(alert);
+
+        await _notifier.SendAsync(alert, ct).ConfigureAwait(false);
+        return true;
     }
 
     /// <summary>默认冷却时间，可在监控器构造时覆盖。</summary>

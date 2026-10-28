@@ -33,3 +33,18 @@ public interface IEventNotifier
 {
     Task SendAsync(AlertMessage alert, CancellationToken ct = default);
 }
+
+/// <summary>
+/// 能同步返回「是否已接受」的通知器（当前由 <see cref="QueuedNotifier"/> 实现）。
+/// 队列满等拒绝场景下调用方不能把消息当作已推送：<see cref="Monitoring.PollingMonitorBase"/>
+/// 只在这个方法返回 true 后才占用告警冷却、才认为本轮异常「已告警」，
+/// 否则会出现「告警没发出去、却进入冷却期，恢复时还发一条孤立的已恢复正常」。
+/// </summary>
+public interface IQueuedNotifier : IEventNotifier
+{
+    /// <summary>
+    /// 尝试把告警放入发送队列。
+    /// 返回 false 表示未接受（队列已满或已关闭），调用方应视为「本轮未告警」并在下轮重试。
+    /// </summary>
+    bool TryEnqueue(AlertMessage alert);
+}
