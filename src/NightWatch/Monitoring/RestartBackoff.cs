@@ -17,6 +17,20 @@ internal sealed class RestartBackoff
 
     private readonly Dictionary<string, State> _states = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>时钟：默认 <see cref="DateTime.UtcNow"/>；测试注入假时钟，无需等真实分钟级窗口。</summary>
+    private readonly Func<DateTime> _utcNow;
+
+    public RestartBackoff()
+        : this(static () => DateTime.UtcNow)
+    {
+    }
+
+    /// <summary>注入时钟，仅用于测试（生产一律用默认构造函数）。</summary>
+    internal RestartBackoff(Func<DateTime> utcNow)
+    {
+        _utcNow = utcNow;
+    }
+
     /// <summary>
     /// 是否允许本次拉起。<paramref name="fused"/> 为 true 表示已达尝试上限，调用方应停止自动拉起。
     /// </summary>
@@ -33,14 +47,14 @@ internal sealed class RestartBackoff
         }
 
         var delay = TimeSpan.FromMinutes(Math.Max(1, staleMinutes) * (1 << Math.Min(state.Attempts, 2)));
-        return DateTime.UtcNow - state.LastLaunchUtc >= delay;
+        return _utcNow() - state.LastLaunchUtc >= delay;
     }
 
     public void NoteAttempt(string key)
     {
         if (!_states.TryGetValue(key, out var state))
             state = _states[key] = new State();
-        state.LastLaunchUtc = DateTime.UtcNow;
+        state.LastLaunchUtc = _utcNow();
         state.Attempts++;
     }
 

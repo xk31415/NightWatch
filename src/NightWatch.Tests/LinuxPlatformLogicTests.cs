@@ -129,10 +129,11 @@ public class LinuxPlatformLogicTests
     [Theory]
     [InlineData("active", ServiceUnitStatus.Running)]
     [InlineData("reloading", ServiceUnitStatus.Running)]
+    [InlineData("refreshing", ServiceUnitStatus.Running)]              // 运行中的过渡态，不能报异常
     [InlineData("inactive", ServiceUnitStatus.Stopped)]
     [InlineData("failed", ServiceUnitStatus.Stopped)]
-    [InlineData("activating", ServiceUnitStatus.StartPending)]
-    [InlineData("deactivating", ServiceUnitStatus.Other)]
+    [InlineData("activating", ServiceUnitStatus.StartPending)]         // 启动中：等待，不当异常
+    [InlineData("deactivating", ServiceUnitStatus.Stopped)]            // 正在停止：按已停止处理，可被自动拉起
     [InlineData("maintenance", ServiceUnitStatus.Other)]
     [InlineData("", ServiceUnitStatus.Other)]
     public void SystemdStatus_MapsToUnifiedEnum(string output, ServiceUnitStatus expected)
@@ -270,5 +271,46 @@ public class LinuxPlatformLogicTests
         var ex = Assert.Throws<InvalidOperationException>(() => control.Start("myapp.service"));
         Assert.Contains("5", ex.Message);
         Assert.Contains("not found", ex.Message);
+    }
+
+    /// <summary>
+    /// start 必须带 --no-block：慢启动服务不再被 ProcessRunner 的 15 秒超时判失败，
+    /// 由 WaitForRunning 用 is-active 判定是否真的起来了。
+    /// </summary>
+    [Fact]
+    public void StartAndContinue_UseNoBlock()
+    {
+        var calls = new List<IReadOnlyList<string>>();
+        var control = new SystemdServiceControl(arguments =>
+        {
+            calls.Add(arguments);
+            return new ProcessRunner.CommandResult("", "", 0);
+        });
+
+        control.Start("myapp.service");
+        control.Continue("myapp.service");
+
+        Assert.Equal(new[] { "start", "--no-block", "myapp.service" }, calls[0]);
+        Assert.Equal(new[] { "start", "--no-block", "myapp.service" }, calls[1]);
+    }
+
+    /// <summary>
+    /// is-active 与 LoadState 都失败（systemd 未作为 PID1 / D-Bus 不可用 / 权限不足）时：
+    /// 返回值语义不变（Other），但要能把 systemctl 的 stderr 记进诊断，否则没法定性。
+    /// </summary>
+    [Fact]
+    public void GetStatus_BothQueriesFail_LogsStderr_AndKeepsSemantics()
+    {
+        var diagnostics = new List<string>();
+        var control = new SystemdServiceControl(
+            arguments => arguments[0] == "is-active"
+                ? new ProcessRunner.CommandResult("", "Failed to connect to bus: No such file or directory", 1)
+                : new ProcessRunner.CommandResult("", "System has not been booted with systemd", 1),
+            diagnostics.Add);
+
+        Assert.Equal(ServiceUnitStatus.Other, control.GetStatus("myapp.service"));
+
+        Assert.Contains(diagnostics, message => message.Contains("bus", StringComparison.Ordinal));
+        Assert.Contains(diagnostics, message => message.Contains("not been booted", StringComparison.Ordinal));
     }
 }

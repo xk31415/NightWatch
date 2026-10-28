@@ -96,4 +96,21 @@ public class RestartBackoffTests
         Assert.True(backoff.TryClaim("app", staleMinutes: 1, out fused));
         Assert.False(fused);
     }
+
+    /// <summary>注入时钟：退避窗口按时间推进放行，不必在用例里真的等几分钟。</summary>
+    [Fact]
+    public void BackoffWindow_Expires_WithInjectedClock()
+    {
+        var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var backoff = new RestartBackoff(() => now);
+
+        Assert.True(backoff.TryClaim("app", staleMinutes: 1, out _));
+        backoff.NoteAttempt("app");   // attempts=1 → 窗口 = 1 分钟 × 2
+
+        Assert.False(backoff.TryClaim("app", staleMinutes: 1, out _));
+
+        now = now.AddMinutes(3);
+        Assert.True(backoff.TryClaim("app", staleMinutes: 1, out var fused));
+        Assert.False(fused);
+    }
 }

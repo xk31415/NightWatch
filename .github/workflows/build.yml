@@ -11,6 +11,8 @@ jobs:
   build-windows:
     name: Build (Release, win-x64)
     runs-on: windows-latest
+    # 挂起的用例/冒烟最多占用 20 分钟，不再默认吃满 6 小时
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -29,8 +31,10 @@ jobs:
       - name: Build (Release)
         run: dotnet build src/NightWatch/NightWatch.csproj -c Release --no-restore
 
+      # --blame-hang-timeout：单个用例挂起 120 秒即整体判失败并留下 Sequence 文件，
+      #   而不是把 job 拖到超时；trx 供失败时上传定位。
       - name: Test
-        run: dotnet test src/NightWatch.Tests/NightWatch.Tests.csproj -c Release
+        run: dotnet test src/NightWatch.Tests/NightWatch.Tests.csproj -c Release --blame --blame-hang-timeout 120s --logger "trx;LogFileName=results.trx"
 
       - name: Publish (win-x64, framework-dependent)
         run: dotnet publish src/NightWatch/NightWatch.csproj -c Release -r win-x64 --self-contained false -o publish
@@ -41,6 +45,46 @@ jobs:
           if (-not (Test-Path "publish/NightWatch.exe")) { throw "NightWatch.exe 未生成" }
           Get-ChildItem publish | Format-Table Name, Length
 
+      # csproj 的 EnsureNoLocalConfigInPublish 只在「发布计划」层面兜底，这里验证真实产物。
+      # appsettings.example*.json 是给部署者抄的模板，允许保留。
+      - name: Assert no local config in publish
+        shell: pwsh
+        run: |
+          $all = @(Get-ChildItem publish -Filter 'appsettings*.json' -File)
+          $leaks = @($all | Where-Object { $_.Name -notlike 'appsettings.example*' })
+          if ($leaks.Count -gt 0) {
+            throw "publish 目录含本地配置：$($leaks.Name -join ', ')（含真实凭据，会覆盖服务器生产配置）"
+          }
+          Write-Host "publish 不含本地配置，仅示例：$(($all.Name) -join ', ')"
+
+      # 冒烟：证明二进制真能在 Windows 上启动（此前只断言 exe 存在）。
+      # 配置为空 => 无监控器，进程常驻；8 秒仍在运行视为启动成功（与 Linux 的 0/124 语义对齐）。
+      # 用 .NET Process.Start 而不是 Start-Process -PassThru：后者的 ExitCode 在 Windows PowerShell 5.1
+      # 上取不到值（实测为空），失败时只会打印「退出码 」丢掉关键诊断信息。
+      # 成功时顺手删掉冒烟产生的 logs/，避免把 CI 的运行日志带进发布制品。
+      - name: Smoke run (windows)
+        shell: pwsh
+        run: |
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = (Resolve-Path "publish\NightWatch.exe").Path
+          $psi.WorkingDirectory = (Resolve-Path "publish").Path
+          $psi.UseShellExecute = $false
+          $proc = [System.Diagnostics.Process]::Start($psi)
+          try {
+            if ($proc.WaitForExit(8000)) {
+              $code = $proc.ExitCode
+              if ($code -ne 0) { throw "Windows 启动冒烟失败，退出码 $code" }
+              Write-Host "启动冒烟通过（进程自行退出，退出码 0）"
+            }
+            else {
+              Write-Host "启动冒烟通过（8 秒内持续运行，属正常）"
+            }
+          }
+          finally {
+            if (-not $proc.HasExited) { $proc.Kill(); $proc.WaitForExit(5000) | Out-Null }
+          }
+          Remove-Item -Path "publish\logs" -Recurse -Force -ErrorAction SilentlyContinue
+
       # 注意：appsettings.json 含真实凭据，已被 .gitignore 排除，不会出现在 CI 产物中。
       # 部署时用 appsettings.example.json 复制改名并填入真实值。
       - name: Upload publish artifact
@@ -50,9 +94,23 @@ jobs:
           path: publish/
           retention-days: 14
 
+      # 失败时留证据：trx + Sequence（挂起/崩溃定位）、冒烟留下的运行日志。
+      # 成功路径已在冒烟末尾删掉 publish/logs，所以这里只会在失败时才有内容。
+      - name: Upload test results (failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-win-x64
+          path: |
+            src/NightWatch.Tests/TestResults/**
+            publish/logs/**
+          retention-days: 7
+          if-no-files-found: warn
+
   build-linux:
     name: Build (Release, linux-x64)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -73,7 +131,7 @@ jobs:
 
       # Linux 上运行同一套测试：Windows-only 用例（ACL/SID）自动跳过，/proc 解析与权限位用例在此执行。
       - name: Test
-        run: dotnet test src/NightWatch.Tests/NightWatch.Tests.csproj -c Release
+        run: dotnet test src/NightWatch.Tests/NightWatch.Tests.csproj -c Release --blame --blame-hang-timeout 120s --logger "trx;LogFileName=results.trx"
 
       - name: Publish (linux-x64, framework-dependent)
         run: dotnet publish src/NightWatch/NightWatch.csproj -c Release -r linux-x64 --self-contained false -o publish
@@ -83,9 +141,20 @@ jobs:
           test -f publish/NightWatch || { echo "NightWatch 可执行文件未生成"; exit 1; }
           ls -la publish
 
+      # 与 Windows 对称：验证真实产物里没有本地配置；appsettings.example*.json 允许保留。
+      - name: Assert no local config in publish
+        run: |
+          leaks=$(find publish -maxdepth 1 -name 'appsettings*.json' ! -name 'appsettings.example*')
+          if [ -n "$leaks" ]; then
+            echo "publish 目录含本地配置：$leaks（含真实凭据，会覆盖服务器生产配置）"
+            exit 1
+          fi
+          echo "publish 不含本地配置，仅示例：$(find publish -maxdepth 1 -name 'appsettings.example*.json' -printf '%f ' 2>/dev/null)"
+
       # 冒烟：证明二进制能在 Linux 上真正启动（此前从未运行过，只剩“编译通过”）。
       # 配置为空 => 没有监控器；进程常驻，8 秒后被 timeout 杀掉属正常。
       # 0 = 收到 SIGTERM 后优雅退出；124 = 被 timeout 杀掉；其它 = 启动失败。
+      # 成功时顺手删掉冒烟产生的 logs/，避免把 CI 的运行日志带进发布制品。
       - name: Smoke run (linux)
         run: |
           set +e
@@ -97,6 +166,7 @@ jobs:
             exit 1
           fi
           echo "启动冒烟通过（退出码 $code）"
+          rm -rf ./publish/logs
 
       - name: Upload publish artifact
         uses: actions/upload-artifact@v4
@@ -104,3 +174,14 @@ jobs:
           name: NightWatch-linux-x64
           path: publish/
           retention-days: 14
+
+      - name: Upload test results (failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-linux-x64
+          path: |
+            src/NightWatch.Tests/TestResults/**
+            publish/logs/**
+          retention-days: 7
+          if-no-files-found: warn

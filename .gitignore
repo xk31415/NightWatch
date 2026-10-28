@@ -35,3 +35,6 @@ Thumbs.db
 
 # 部署打包产物
 *.tar.gz
+
+# 测试产物（dotnet test --logger trx / --blame）
+[Tt]est[Rr]esults/

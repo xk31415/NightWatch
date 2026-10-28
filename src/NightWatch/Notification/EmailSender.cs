@@ -3,6 +3,7 @@ using MailKit.Security;
 using Microsoft.Extensions.Logging;
 using MimeKit;
 using NightWatch.Models;
+using System.Diagnostics;
 using System.Text;
 
 namespace NightWatch.Notification;
@@ -10,6 +11,12 @@ namespace NightWatch.Notification;
 /// <summary>SMTP 邮件通知通道（MailKit），HTML 格式正文 + 纯文本兜底。</summary>
 public class EmailSender : IChannelSender
 {
+    /// <summary>
+    /// 整封邮件的总超时预算：MailKit 的 <c>Timeout</c> 是「单次网络操作」超时，
+    /// 连接 + 认证 + 发信串起来可能远超 15 秒，所以这里再给整次发送套一个上限。
+    /// </summary>
+    internal static readonly TimeSpan WholeSendBudget = TimeSpan.FromSeconds(15);
+
     private readonly NotifyChannel _channel;
     private readonly ILogger _logger;
 
@@ -45,20 +52,36 @@ public class EmailSender : IChannelSender
         };
 
         using var client = new SmtpClient { Timeout = 15_000 };
-        await client.ConnectAsync(_channel.SmtpHost, _channel.SmtpPort,
-            _channel.UseSsl ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTls, ct);
+        var stage = "连接 SMTP";
+        var stopwatch = Stopwatch.StartNew();
         try
         {
-            if (!string.IsNullOrWhiteSpace(_channel.Username))
-                await client.AuthenticateAsync(_channel.Username, _channel.Password ?? "", ct);
+            // 整次发送（连接/认证/发信）共享 15s 总预算；超时异常会带上卡住的阶段。
+            await TimeBoundedOperation.RunAsync(async token =>
+            {
+                await client.ConnectAsync(_channel.SmtpHost, _channel.SmtpPort,
+                    _channel.UseSsl ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTls, token)
+                    .ConfigureAwait(false);
 
-            await client.SendAsync(mime, ct);
+                stage = "SMTP 认证";
+                if (!string.IsNullOrWhiteSpace(_channel.Username))
+                    await client.AuthenticateAsync(_channel.Username, _channel.Password ?? "", token).ConfigureAwait(false);
+
+                stage = "发送邮件";
+                await client.SendAsync(mime, token).ConfigureAwait(false);
+            }, () => stage, ct, WholeSendBudget).ConfigureAwait(false);
         }
         finally
         {
+            // 断开也计入总预算：还剩多少预算就用多少，耗尽时只给 200ms 兜底，
+            // 免得半死连接上的 Disconnect 再把总耗时拖长。
+            var remaining = WholeSendBudget - stopwatch.Elapsed;
+            if (remaining < TimeSpan.FromMilliseconds(200))
+                remaining = TimeSpan.FromMilliseconds(200);
+            using var disconnectCts = new CancellationTokenSource(remaining);
             try
             {
-                await client.DisconnectAsync(true, ct);
+                await client.DisconnectAsync(true, disconnectCts.Token).ConfigureAwait(false);
             }
             catch (Exception ex)
             {

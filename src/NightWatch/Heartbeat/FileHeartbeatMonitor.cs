@@ -14,16 +14,24 @@ public class FileHeartbeatMonitor : PollingMonitorBase
 {
     private readonly List<HeartbeatRule> _rules;
     private readonly ProcessLaunchCoordinator _launchGuard;
-    private readonly RestartBackoff _backoff = new();
+    private readonly RestartBackoff _backoff;
     private readonly ScheduleRule? _defaultSchedule;
 
     public FileHeartbeatMonitor(WatchDogOptions options, ProcessLaunchCoordinator launchGuard,
         IEventNotifier notifier, ILogger<FileHeartbeatMonitor> logger)
+        : this(options, launchGuard, notifier, logger, new RestartBackoff())
+    {
+    }
+
+    /// <summary>注入退避实例（测试用假时钟推进窗口），生产由公共构造函数创建默认实例。</summary>
+    internal FileHeartbeatMonitor(WatchDogOptions options, ProcessLaunchCoordinator launchGuard,
+        IEventNotifier notifier, ILogger<FileHeartbeatMonitor> logger, RestartBackoff backoff)
         : base(notifier, logger)
     {
         _rules = options.FileHeartbeats;
         _launchGuard = launchGuard;
         _defaultSchedule = options.Schedule;
+        _backoff = backoff;
         KillAndProbeStillRunning = DefaultKillAndProbeStillRunning;
         StartTarget = DefaultStartTarget;
     }
@@ -37,9 +45,6 @@ public class FileHeartbeatMonitor : PollingMonitorBase
 
     /// <summary>拉起目标进程，失败时抛异常由调用方转成告警。默认走 <see cref="ProcessStartInfoFactory"/> + <see cref="Process.Start(ProcessStartInfo)"/>。</summary>
     internal Action<HeartbeatRule> StartTarget { get; set; }
-
-    /// <summary>自动拉起退避状态；测试用它构造「已熔断」场景（真实退避按分钟计，无法在用例里等出来）。</summary>
-    internal RestartBackoff Backoff => _backoff;
 
     protected override string MonitorName => "文件心跳";
     protected override int IntervalSeconds =>
