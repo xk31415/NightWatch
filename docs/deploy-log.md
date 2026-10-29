@@ -1,7 +1,11 @@
 # NightWatch 部署记录
 
+> 本文件是**持续累积**的部署/升级记录（每次发版后追加一节），最初的安装日期是 2026-10-25。
+
 日期：2026-10-25。目标：阿里云 Windows Server（`<服务器公网 IP>`，入库时已脱敏）。
 
+> **2026-10-28 19:02 已升级至 v1.4.2（发行版在服务器端直接拉取）**：告警排版补全（URL/反引号/行首列表转义）、钉钉正文多行不再折叠、主 IPv4 优先取有默认网关的物理网卡、HTTP 心跳键表随清理淘汰（长期运行不再无界增长），其余为平台层健壮性与 CI 硬化。SHA256 `0718c02c...aba5a` 与发布说明一致，包内无 `appsettings.json`。`ProductVersion` 确认 `1.0.0+423e89e`。服务 `RUNNING`、心跳 200、23 条目、配置哈希未变、零 `[ERR]`。**本次首次尝试「服务器端直拉」：21 KB/s、耗时 191 秒，比本机（697 KB/s、5 秒）慢 30 倍**，详见「2026-10-28 升级 v1.4.2 记录」。
+>
 > **2026-10-27 23:53 已升级至 v1.4.1（发行版直拉，经 RDP 手工执行）**：钉钉/企微告警版式修正——主机、IP、告警项由三个独立引用块合并为单个连续竖条。SHA256 `350f1bab...0abec4` 与发布说明一致；`ProductVersion` 确认 `1.0.0+f1485cf`。包内无 `appsettings.json`。**升级过程中 ACL 一步静默失败，导致服务反复报「错误 5 拒绝访问」，最终以 `icacls /reset /T /C` 恢复后启动成功**，详见「2026-10-27 升级 v1.4.1 记录」。
 >
 > **2026-10-26 11:29 已升级至 v1.4.0（发行版直拉）**：告警带主机名与 IP、CPU 采样改历史差值、钉钉排版修复、Linux 支持。SHA256 `b8724bff...c5981f` 与发布说明一致，包内无 `appsettings.json`。生产配置原样沿用（无需修改），升级后 23 个条目（21 个程序文件 + `appsettings.json` + `logs`），心跳 200，横幅「通知通道 2」。旧版目录保留在 `C:\AppData\NightWatch-old` 作为回滚副本。
@@ -157,6 +161,49 @@ icacls "C:\AppData\NightWatch" /grant:r "*S-1-5-32-544:F" "*S-1-5-18:F" "*S-1-5-
 - 回滚副本：`C:\AppData\NightWatch-old`（v1.4.0）、`C:\AppData\NightWatch-old-v1.2.0`（v1.2.0）
 - 配置留底：`C:\Windows\Temp\nw-cfg-before-upgrade.json`（确认稳定后再删）
 
+## 2026-10-28 升级 v1.4.2 记录
+
+- **版本**：v1.4.1 → v1.4.2（提交 `423e89e`），无破坏性配置变更
+- **制品**：`NightWatch-v1.4.2-win-x64.zip`，4090379 字节，SHA256 `0718c02cb42292078fc5508f4dd9380b8ee88cbd2af3f459e1733286f79aba5a`，包内 21 个文件（+2 个 example 配置，无 `appsettings.json`）
+
+### 下载位置对比（本次专门实测）
+
+| 环节 | 耗时 | 速度 | 结论 |
+|---|---|---|---|
+| 本机 `curl -L` 直连 GitHub | 5 秒 | ~697 KB/s | 快，但依赖本机网络 |
+| 服务器 `curl.exe -L` 直连 GitHub | **191 秒** | ~21 KB/s | 能通，但慢 30 倍；`--max-time 600` 才够 |
+
+两条链路拿到的 zip **哈希完全一致**，说明服务器到 GitHub 可达、内容没问题，只是带宽差。**结论：日常升级仍优先本机下载 + `scp` 上传**（4 MB 包走 SSH 用几秒）；服务器直拉只在无法从本机传输时作为备份路径，且必须显式放宽 `--max-time`，默认超时会把 3 分钟的下载掐断。
+
+### 执行步骤
+
+1. 本机下载 → `sha256sum` 对比发布说明 → `unzip -l` 确认无 `appsettings.json`
+2. 服务器 `curl.exe -L --max-time 600` 直拉一份 → `certutil -hashfile ... SHA256` 复核（两份同哈希）
+3. 生产配置留底：`scp` 把 `appsettings.json` 拉到本地（1849 字节，SHA256 `58247f26...`）
+4. `sc stop` → **轮询等 STOPPED**（本次 STOP_PENDING 持续 ~33 秒，两次 `ping -n` 等待才转 STOPPED，紧接着 `sc start` 会报 1056）
+5. `move` 旧目录 → `C:\AppData\NightWatch-old` → `mkdir` 新目录 → `tar -xf <zip> -C <新目录>`
+6. 回填 `appsettings.json`（用 `scp` 上传，见下「copy 不可用」）
+7. ACL 三步（`setowner` → 根目录 `(OI)(CI)` 授权不 `/T` → `/T` 补文件级），逐步回读
+8. `sc start` → 轮询 RUNNING
+
+### 本次新增的两个环境坑
+
+- **⚠️ 经 SSH 调 `copy` / `xcopy` 一律失败**：返回「系统找不到指定的文件。已复制 0 个文件」，但目标文件**确实存在**（`dir /b` 能列出来），`copy` 不带 `/y` 同样失败，加不加 `MSYS_NO_PATHCONV=1` 都一样。同一路径交给 `dir` / `icacls` / `tar` 均正常。**可靠替代：`scp` 上传或下载单个文件**；本地 → 服务器实测稳定。
+- **⚠️ 部分 `dir` 调用返回空且退出码 0**：升级第一轮把 `move & mkdir & tar & dir | find /c` 串成一条链执行，`tar` 报不出错、`dir /b ... | find /c /v ""` 返回 `0`，但目录里其实已有内容/或已消失，导致一度误判「解压出 0 个文件」。**判据：拆成独立命令执行，每条都带引号路径，解压后用 `dir /b "<dir>"` 目视核对条目名**，不要只信 `find /c` 的计数。
+
+### 验证结果
+
+- `sc query NightWatch`：`STATE = 4 RUNNING`，`AUTO_START`，`LocalSystem`
+- `curl.exe http://localhost:5200/` → `HB_HTTP=200`
+- 目录 23 条目（21 程序文件 + `appsettings.json` + `logs`）
+- 启动横幅：`进程规则 0 | 服务规则 0 | 文件规则 0 | 文件心跳规则 1 | HTTP心跳 已启用 | 通知通道 2`；通道行 `已启用 2 个通知通道: 企业微信告警, 钉钉告警；告警主机 IZK7REPS48NHU6Z；将附加本机 IP（多网卡优先取有默认网关的物理网卡）`
+- `ProductVersion = 1.0.0+423e89eeca2004b98d9d962d8920f91c9bad24b5`（v1.4.2 提交 `423e89e`）
+- 生产配置 SHA256 `58247f26f800fb24839b576121b86f61d9b1a0a0de3423f5353c5bf7bc522a7b`（与升级前留底一致，未被覆盖）
+- `[ERR]` 计数 0；自检行为 `部署安全自检未启用（EnableStartupSecurityCheck=false），跳过权限检查`
+- ACL：`C:\AppData\NightWatch` 仅 `Users:(RX)` + `SYSTEM:(F)` + `Administrators:(F)`（另有对应 `(OI)(CI)` 继承项），`NightWatch.exe` / `appsettings.json` 均有三条显式 ACE（非空 ACL）
+- 回滚副本：`C:\AppData\NightWatch-old`（v1.4.1，23 条目，含 `appsettings.json`）
+- 临时文件：`C:\Windows\Temp\nw-v142.zip`（本机上传）、`nw-v142-srv.zip`（服务器直拉），确认稳定后删
+
 ## 后续待办
 
 1. ~~**磁盘清理**~~：2026-10-25 21:19 已按「只清 Windows 更新缓存」处理，仅回收 79.7 MB（8.7 → 8.8 GB）。当前阈值已放宽为 1 GB，8.8 GB 属正常水位，不再告警。真要扩容需在阿里云控制台扩云盘。
@@ -192,3 +239,6 @@ icacls "C:\AppData\NightWatch" /grant:r "*S-1-5-32-544:F" "*S-1-5-18:F" "*S-1-5-
 - **备份链消失疑点**：14:01 升级解压后发现 appsettings.json.bak/bak2/bak3 全部消失（tar 与 icacls 均不应删除文件，原因未查明）。今后升级前先把当前 appsettings.json 下载到本地留底，不要只依赖服务器上的副本
 - 升级后验证三件事：启动横幅"通知通道 N"是否为预期值、findstr 核对阈值、`Invoke-WebRequest http://localhost:5200/` 返回 200
 - **运行时安装踩坑（2026-10-25）**：官网 `aspnetcore-runtime-10.0.13-win-x64.exe /install /quiet` 返回 exit 0，但只落了 `shared\Microsoft.AspNetCore.App\10.0.13`，**host（dotnet.exe/hostfxr）与 Microsoft.NETCore.App 缺失**，bundle 实际中途失败。此时 `dotnet-install.ps1 -Runtime aspnetcore` 会误判"已安装"而跳过；正确补救是 `dotnet-install.ps1 -Channel 10.0 -Runtime dotnet -InstallDir "C:\Program Files\dotnet" -NoPath`（装上 host + NETCore.App，与已有 AspNetCore.App 组合完整）。判断标准：`dotnet.exe --list-runtimes` 必须同时列出 NETCore.App 与 AspNetCore.App 两行
+- **⚠️ 经 SSH 调 `copy` / `xcopy` 不可用（2026-10-28 实测）**：一律返回「系统找不到指定的文件。已复制 0 个文件」，而目标文件确实存在（`dir /b` 可列出），带不带 `/y`、配不配 `MSYS_NO_PATHCONV=1` 都一样；同一路径给 `dir` / `icacls` / `tar` 都正常。**传文件用 `scp`，别用 `copy`**
+- **升级时把命令拆开执行**：`move & mkdir & tar & dir | find /c` 串成一条链时，`tar` 不出错但 `find /c` 回 `0`，会误判成"解压出 0 个文件"。解压后统一用 `dir /b "<dir>"` 目视核对条目名
+- **服务器端直拉 release 可行但很慢（2026-10-28 实测）**：`curl.exe -L --max-time 600` 下 4 MB 包耗时 191 秒（21 KB/s），本机同链路 5 秒（697 KB/s），哈希一致。默认 `--max-time` 会掐断；日常升级仍用「本机下载 + scp 上传」
