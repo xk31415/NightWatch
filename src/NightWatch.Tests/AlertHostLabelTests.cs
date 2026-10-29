@@ -58,6 +58,10 @@ public class AlertHostLabelTests
 
         Assert.Contains("主机：prod-db-01", md);
         Assert.Contains("IP：10.0.0.5", md);
+
+        // 企微按单换行断行：引用块内若用空引用行会渲染成一大段空白（2026-10-29 实测）
+        Assert.Contains("> **主机：prod-db-01**\n> **IP：10.0.0.5**", md);
+        Assert.DoesNotContain("> **主机：prod-db-01**\n>\n> **IP", md);
         Assert.Contains("资源监控 / system-resources", md);
         Assert.DoesNotContain("###", md);
         Assert.Contains($"**[{NotificationConstants.Tag}]", md);

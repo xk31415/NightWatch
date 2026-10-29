@@ -288,7 +288,9 @@ public class WebhookRetryTests
     [Fact]
     public async Task AttemptTimeout_CountsAsRetryable_AndStopsAtBudget()
     {
+        // 用假时钟：真实 20ms 超时在 CI 上的调度开销可能把 200ms 预算耗掉，导致只跑 2 次
         var attempts = 0;
+        var elapsed = TimeSpan.Zero;
         await Assert.ThrowsAsync<InvalidOperationException>(() => WebhookRetry.ExecuteAsync(
             "测试通道",
             async token =>
@@ -298,7 +300,8 @@ public class WebhookRetryTests
             },
             NullLogger.Instance, CancellationToken.None, NoDelay,
             attemptTimeout: TimeSpan.FromMilliseconds(20),
-            totalBudget: TimeSpan.FromMilliseconds(200)));
+            totalBudget: TimeSpan.FromMilliseconds(200),
+            elapsedProvider: () => elapsed));
 
         Assert.Equal(3, attempts);
     }
@@ -308,17 +311,20 @@ public class WebhookRetryTests
     {
         // 首次尝试超时后只剩不够再等一次的预算：不应再发起重试（也不会把 1 次说成 3 次）
         var attempts = 0;
+        var elapsed = TimeSpan.Zero;
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => WebhookRetry.ExecuteAsync(
             "测试通道",
             async token =>
             {
                 attempts++;
+                elapsed = TimeSpan.FromMilliseconds(95); // 首次尝试后预算只剩 5ms
                 await Task.Delay(Timeout.InfiniteTimeSpan, token);
             },
             NullLogger.Instance, CancellationToken.None,
             delays: [TimeSpan.FromSeconds(10), TimeSpan.Zero],
             attemptTimeout: TimeSpan.FromMilliseconds(20),
-            totalBudget: TimeSpan.FromMilliseconds(100)));
+            totalBudget: TimeSpan.FromMilliseconds(100),
+            elapsedProvider: () => elapsed));
 
         Assert.Equal(1, attempts);
         Assert.Contains("已尝试 1 次", ex.Message, StringComparison.Ordinal);

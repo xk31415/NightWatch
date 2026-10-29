@@ -28,7 +28,9 @@ internal static class MarkdownFormatter
         var headline = $"**[{NotificationConstants.Tag}] {(alert.IsWarning ? "告警通知" : "状态通知")}**";
         return MarkdownLimit.Truncate(
             FormatCommon(alert, status,
-                $"<font color=\"comment\">时间：{alert.Time:yyyy-MM-dd HH:mm:ss}</font>", headline),
+                $"<font color=\"comment\">时间：{alert.Time:yyyy-MM-dd HH:mm:ss}</font>", headline,
+                // 企业微信：单个换行就会断行；引用块内用「空引用行」会被渲染成整段空白
+                headerLineSeparator: "\n"),
             MarkdownLimit.WebhookMaxBytes);
     }
 
@@ -42,16 +44,23 @@ internal static class MarkdownFormatter
         var headline = $"#### [{NotificationConstants.Tag}] {(alert.IsWarning ? "告警通知" : "状态通知")}";
         // 钉钉 markdown 上限比企微宽，但按同值保守截断，避免换通道后行为不一致。
         return MarkdownLimit.Truncate(
-            FormatCommon(alert, status, $"时间：{alert.Time:yyyy-MM-dd HH:mm:ss}", headline),
+            FormatCommon(alert, status, $"时间：{alert.Time:yyyy-MM-dd HH:mm:ss}", headline,
+                // 钉钉遵循标准 markdown：引用块内单个换行会折叠成空格，必须用空引用行分段
+                headerLineSeparator: "\n>\n"),
             MarkdownLimit.WebhookMaxBytes);
     }
 
-    private static string FormatCommon(AlertMessage alert, string status, string time, string headline)
+    /// <param name="headerLineSeparator">
+    /// 引用块内字段之间的分隔：钉钉必须用空引用行（<c>\n&gt;\n</c>，否则折叠成一行），
+    /// 企业微信用单个换行即可（空引用行会渲染成一大段空白）。
+    /// </param>
+    private static string FormatCommon(AlertMessage alert, string status, string time, string headline,
+        string headerLineSeparator)
     {
         // 状态与时间之间必须空行：钉钉遵循标准 markdown（单个换行折叠为空格），
         // 企业微信则宽松得多（单换行也断行），用空行两边才一致。
         return $"{headline}\n\n" +
-               FormatHeaderBlock(alert) +
+               FormatHeaderBlock(alert, headerLineSeparator) +
                $"{FormatBody(alert.Body)}\n\n" +
                $"{status}\n\n" +
                time;
@@ -77,7 +86,7 @@ internal static class MarkdownFormatter
     /// 拆成多个引用块会在字段之间留出大段空白，看起来像一条条独立消息；
     /// 而字段之间只用单个换行又会被钉钉折叠成空格（渲染成「主机：xxxIP：yyy」）。
     /// </summary>
-    private static string FormatHeaderBlock(AlertMessage alert)
+    private static string FormatHeaderBlock(AlertMessage alert, string lineSeparator)
     {
         var lines = new List<string>();
         if (!string.IsNullOrWhiteSpace(alert.Host))
@@ -86,7 +95,7 @@ internal static class MarkdownFormatter
             lines.Add($"> **IP：{Escape(SanitizeSingleLine(alert.HostIp))}**");
         lines.Add($"> **{Escape(SanitizeSingleLine(alert.Title))}**");
 
-        return string.Join("\n>\n", lines) + "\n\n";
+        return string.Join(lineSeparator, lines) + "\n\n";
     }
 
     /// <summary>Title/Host/HostIp 这类单行字段：换行替换成空格，避免把内容带出引用块。</summary>
