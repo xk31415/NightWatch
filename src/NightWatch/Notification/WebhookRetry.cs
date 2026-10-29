@@ -39,9 +39,13 @@ internal static class WebhookRetry
     /// <see cref="TimeoutException"/> / <see cref="IOException"/> / <see cref="SocketException"/>、
     /// 或本次尝试超时时会重试；其它异常（如 4xx / 业务错误）原样抛出，不重试。
     /// </summary>
+    /// <param name="elapsedProvider">
+    /// 已耗时读数的来源，默认 <see cref="Stopwatch"/>；测试注入假时钟以避免依赖墙钟
+    /// （CI 上每次 20ms 超时的调度开销叠加可能越过预算，导致「期望 3 次、实际 2 次」的假失败）。
+    /// </param>
     public static async Task ExecuteAsync(string channelName, Func<CancellationToken, Task> attempt,
         ILogger logger, CancellationToken ct, IReadOnlyList<TimeSpan>? delays = null,
-        TimeSpan? attemptTimeout = null, TimeSpan? totalBudget = null)
+        TimeSpan? attemptTimeout = null, TimeSpan? totalBudget = null, Func<TimeSpan>? elapsedProvider = null)
     {
         var retryDelays = delays ?? DefaultDelays;
         var perAttemptTimeout = attemptTimeout ?? DefaultAttemptTimeout;
@@ -49,12 +53,13 @@ internal static class WebhookRetry
         var maxAttempts = retryDelays.Count + 1;
 
         var stopwatch = Stopwatch.StartNew();
+        TimeSpan Elapsed() => elapsedProvider?.Invoke() ?? stopwatch.Elapsed;
         Exception? lastError = null;
         var attemptsMade = 0;
 
         for (var attemptNumber = 1; attemptNumber <= maxAttempts; attemptNumber++)
         {
-            var remaining = budget - stopwatch.Elapsed;
+            var remaining = budget - Elapsed();
             if (remaining <= TimeSpan.Zero)
                 break;
 
@@ -83,7 +88,7 @@ internal static class WebhookRetry
                     break;
 
                 var delay = retryDelays[attemptNumber - 1];
-                if (stopwatch.Elapsed + delay >= budget)
+                if (Elapsed() + delay >= budget)
                     break;
 
                 logger.LogWarning(
