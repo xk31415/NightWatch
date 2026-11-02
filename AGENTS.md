@@ -23,6 +23,21 @@ dotnet publish src\NightWatch\NightWatch.csproj -c Release -r win-x64 --self-con
 - 新机器 / 新用户 / 刚重置令牌：跑 `tools/set-gitee-token.ps1`（掩码输入 → 写文件 → 收紧权限 → 校验，只打印 login）。
 - GitHub 的凭据在 Windows 凭据管理器里（`git credential fill` 可取），Gitee 的 `git push` 用账号密码，与上面的令牌无关。
 
+## 服务器访问（SSH）
+
+- 生产机连接信息（host / user / port / 私钥）在 `%USERPROFILE%\.nightwatch\server.json`，**不入库**。仓库、文档、聊天输出里都不得出现服务器 IP 或密钥内容；`docs/deploy-log.md` 保持脱敏（`<服务器公网 IP>`）。
+- 统一用 `tools/ssh-server.ps1`，不要手搓 ssh 参数：
+  ```powershell
+  .\tools\ssh-server.ps1 -Command "sc query NightWatch"          # 执行单条命令
+  .\tools\ssh-server.ps1 -Command "icacls C:\AppData\NightWatch" # 只读核对
+  .\tools\ssh-server.ps1 -Upload .\pkg.zip -RemoteDir C:\Windows\Temp
+  .\tools\ssh-server.ps1 -Interactive                            # 交互登录
+  .\tools\ssh-server.ps1 -Command "..." -DryRun                  # 只打印、不连接（主机打码）
+  ```
+- **默认只读**：脚本会拒绝 `sc stop/start`、删改文件、改 ACL 等破坏性命令（exit 2）。确需执行要加 `-AllowDestructive`，并且**先取得用户明确同意**——删除、覆盖、重启服务都属于不可逆或影响线上。
+- 常见只读核对：`sc query <svc>`、`certutil -hashfile <file> SHA256`、`icacls <path>`、`Get-Item ... VersionInfo.ProductVersion`、`Select-String` 数日志 `[ERR]`、`Get-ChildItem ... .Count`。
+- 核对结果写回 `docs/deploy-log.md` 时，注明**复核日期**（升级时间与复核时间可能不同），数值照抄真实输出，不臆造。
+
 ## 提交与发布
 
 - 提交前 `git status` 看清工作区；**只 `git add` 本次改动的具体文件**（可能有其他会话的在研改动）。
