@@ -217,7 +217,7 @@ icacls "C:\AppData\NightWatch" /grant:r "*S-1-5-32-544:F" "*S-1-5-18:F" "*S-1-5-
 - **ACL 复核（2026-11-02 复核）**：根目录为 `Users:(RX)` + `SYSTEM:(F)` + `Administrators:(F)`，另有三条对应 `(OI)(CI)` 继承项；`NightWatch.exe` 与 `appsettings.json` 各有**三条显式 ACE**（非空 ACL）。与 v1.4.2 记录一致，未复现 v1.4.1 那种 ACL 被清空的情况。
 - **服务与版本复核（2026-11-02）**：`sc query` 为 `RUNNING`；`ProductVersion=1.0.0+0d5f89a5fd90c002dabba79ee3003da99a64913d`；目录 23 条目；回滚副本 `NightWatch-old` 为 v1.4.2（`1.0.0+423e89e`，23 条目）；`10-29` 与 `11-02` 日志中 `[ERR]` 计数均为 0。
 - **回滚副本**：`C:\AppData\NightWatch-old`（v1.4.2，23 条目，含 `appsettings.json`），保留待观察期结束。
-- **清理（2026-11-02）**：已删除 `C:\Windows\Temp\nw-upgrade-143`（升级包 + bat）与升级前配置备份 `nw-cfg-before-v143.json`，释放约 4.1 MB；服务仍 `RUNNING`、配置 SHA256 未变、目录仍 23 条目。Temp 下仍留 v1.4.2 的两个包 `nw-v142.zip` / `nw-v142-srv.zip`（共 8.2 MB），确认不需要回滚旧版本后可一并删除。
+- **清理（2026-11-02 完成）**：已删除 `C:\Windows\Temp\nw-upgrade-143`（升级包 + bat）、升级前配置备份 `nw-cfg-before-v143.json`、以及 v1.4.2 的两个旧包 `nw-v142.zip` / `nw-v142-srv.zip`，累计释放约 11.3 MB。清理后复核：`Temp` 下已无 `nw-*` 残留；服务 `RUNNING`；配置 SHA256 仍为 `58247f26…a7b`；目录仍 23 条目；C 盘可用 `11,232,886,784` 字节。回滚副本 `NightWatch-old`（v1.4.2）保留。
 
 ## 后续待办
 
