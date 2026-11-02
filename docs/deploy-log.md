@@ -4,6 +4,8 @@
 
 日期：2026-10-25。目标：阿里云 Windows Server（`<服务器公网 IP>`，入库时已脱敏）。
 
+> **2026-10-29 10:10 已升级至 v1.4.3（本机 scp + SSH 跑 upgrade bat）**：企微告警字段分隔符修复（主机 / IP / 告警项 三行紧贴，不再出现大段空白）；WebhookRetry 预算用例改注入假时钟（仅测试改动，无运行时行为变化）。SHA256 `89c1c2c3...9ea678` 与包一致，包内无生产 `appsettings.json`。`ProductVersion` 确认 `1.0.0+0d5f89a`。服务 `RUNNING`、升级脚本内心跳 `HB_HTTP=200`、启动横幅「通知通道 2 / 文件心跳规则 1」、零 `[ERR]`。旧版在 `C:\AppData\NightWatch-old`。详见「2026-10-29 升级 v1.4.3 记录」。
+
 > **2026-10-28 19:02 已升级至 v1.4.2（发行版在服务器端直接拉取）**：告警排版补全（URL/反引号/行首列表转义）、钉钉正文多行不再折叠、主 IPv4 优先取有默认网关的物理网卡、HTTP 心跳键表随清理淘汰（长期运行不再无界增长），其余为平台层健壮性与 CI 硬化。SHA256 `0718c02c...aba5a` 与发布说明一致，包内无 `appsettings.json`。`ProductVersion` 确认 `1.0.0+423e89e`。服务 `RUNNING`、心跳 200、23 条目、配置哈希未变、零 `[ERR]`。**本次首次尝试「服务器端直拉」：21 KB/s、耗时 191 秒，比本机（697 KB/s、5 秒）慢 30 倍**，详见「2026-10-28 升级 v1.4.2 记录」。
 >
 > **2026-10-27 23:53 已升级至 v1.4.1（发行版直拉，经 RDP 手工执行）**：钉钉/企微告警版式修正——主机、IP、告警项由三个独立引用块合并为单个连续竖条。SHA256 `350f1bab...0abec4` 与发布说明一致；`ProductVersion` 确认 `1.0.0+f1485cf`。包内无 `appsettings.json`。**升级过程中 ACL 一步静默失败，导致服务反复报「错误 5 拒绝访问」，最终以 `icacls /reset /T /C` 恢复后启动成功**，详见「2026-10-27 升级 v1.4.1 记录」。
@@ -20,7 +22,7 @@
 |---|---|
 | 安装目录 | `C:\AppData\NightWatch` |
 | 服务名 | `NightWatch`（自动启动，SYSTEM 运行） |
-| 当前版本 | v1.4.1（`ProductVersion=1.0.0+f1485cf`，`NightWatch.dll` 2026-10-27 15:07 **UTC**＝北京 23:07，141 KB；`NightWatch.exe` 159 KB），框架依赖 win-x64，21 个程序文件 |
+| 当前版本 | v1.4.3（`ProductVersion=1.0.0+0d5f89a`，2026-10-29 10:10 升级；框架依赖 win-x64，21 个程序文件） |
 | 运行时 | `C:\Program Files\dotnet`：Microsoft.NETCore.App 10.0.13 + Microsoft.AspNetCore.App 10.0.13（2026-10-25 21:00 安装） |
 | 日志 | `C:\AppData\NightWatch\logs\nightwatch-YYYYMMDD.log`（保留 30 天） |
 | 心跳端点 | http://localhost:5200（仅本机监听） |
@@ -203,6 +205,17 @@ icacls "C:\AppData\NightWatch" /grant:r "*S-1-5-32-544:F" "*S-1-5-18:F" "*S-1-5-
 - ACL：`C:\AppData\NightWatch` 仅 `Users:(RX)` + `SYSTEM:(F)` + `Administrators:(F)`（另有对应 `(OI)(CI)` 继承项），`NightWatch.exe` / `appsettings.json` 均有三条显式 ACE（非空 ACL）
 - 回滚副本：`C:\AppData\NightWatch-old`（v1.4.1，23 条目，含 `appsettings.json`）
 - 临时文件：`C:\Windows\Temp\nw-v142.zip`（本机上传）、`nw-v142-srv.zip`（服务器直拉），确认稳定后删
+
+## 2026-10-29 升级 v1.4.3 记录
+
+- **通道**：本机 `C:\Users\67478\Downloads\nw-upgrade-143\` 已有 zip + `upgrade-v1.4.3.bat`；`scp` 到 `C:\Windows\Temp\nw-upgrade-143\`，SSH（`ops_ed25519`）执行 bat。
+- **升级前**：`ProductVersion=1.0.0+423e89e`（v1.4.2），服务 RUNNING。
+- **校验**：zip SHA256 `89c1c2c30ed87f4078d92207410a8a01ba910724fbf0a76d615607ae259ea678` 与 expect 一致。
+- **步骤**：备份 `appsettings.json` → `sc stop` 等到 STOPPED → 旧目录移到 `NightWatch-old`（先删上一份 old）→ `tar -xf` → 回填配置 → ACL 两步（根目录 OI/CI + `/T` 不带继承标记）→ `sc start` 等到 RUNNING。
+- **结果**：`ProductVersion=1.0.0+0d5f89a5fd90c002dabba79ee3003da99a64913d`；bat 内 `HB_HTTP=200`；目录 23 条目；启动日志无 `[ERR]`，通知通道 2、文件心跳规则 1、HTTP 心跳已启用；安全自检按配置跳过（WRN 提示未设环境变量）。
+- **配置复核**：升级前已备份 `appsettings.json` 并回填；**生产配置 SHA256 未做升级前后对比（待补）**。
+- **ACL 复核**：**未记录（待补）**——本次按两步 ACL 执行（根目录 `(OI)(CI)` + `/T` 不带继承标记），v1.4.1 曾因 ACL 静默失败导致「错误 5 拒绝访问」，务必补一条复核结论（`icacls` 三条显式 ACE 非空）。
+- **回滚副本**：`C:\AppData\NightWatch-old`（v1.4.2，23 条目，含 `appsettings.json`）；临时目录 `C:\Windows\Temp\nw-upgrade-143`。确认稳定后再删。
 
 ## 后续待办
 
