@@ -272,6 +272,7 @@ public abstract class PollingMonitorBase : BackgroundService
     /// <summary>
     /// 持续窗口尚未走完时返回 true，调用方应跳过本次通知。
     /// 时钟从本轮第一次观察到异常起算；已经成功告警过的同一轮不再推迟。
+    /// 墙上时钟被回拨时以回拨后的时刻重新起算，避免负 elapsed 把首次告警永久压住。
     /// </summary>
     private bool HoldForSustain(string ruleKey, TimeSpan? sustain, DateTime now,
         out TimeSpan sustainWindow, out TimeSpan elapsed, out bool justStarted)
@@ -285,8 +286,10 @@ public abstract class PollingMonitorBase : BackgroundService
         if (sustainWindow <= TimeSpan.Zero || _alertedRules.Contains(ruleKey))
             return false;
 
-        if (!_unhealthySinceUtc.TryGetValue(ruleKey, out var since))
+        if (!_unhealthySinceUtc.TryGetValue(ruleKey, out var since) || now < since)
         {
+            // NTP / 手动改表把系统时间往回调时，now - since 为负，窗口将永远走不完。
+            // 一律以回拨后的时刻重新起算：宁可多等一个窗口，也不能把告警无限期推迟。
             since = now;
             _unhealthySinceUtc[ruleKey] = since;
             justStarted = true;

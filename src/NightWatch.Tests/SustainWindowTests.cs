@@ -175,6 +175,60 @@ public class SustainWindowTests
     }
 
     [Fact]
+    public async Task SustainElapsed_EnqueueRejected_RetriesNextCheck_WithoutWaitingAnotherWindow()
+    {
+        var notifier = new RejectingQueuedNotifier();
+        var monitor = new ProbeMonitor(notifier, BreachAt);
+
+        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: Sustain120);
+        Assert.Equal(0, notifier.EnqueueAttempts);
+
+        monitor.Advance(Sustain120);
+        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: Sustain120);
+        Assert.Equal(1, notifier.EnqueueAttempts);
+        Assert.Empty(notifier.Messages);
+
+        // 投递被拒后计时不清零：不推进时钟，下一轮就应再次尝试，而不是重新等一个窗口。
+        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: Sustain120);
+        Assert.Equal(2, notifier.EnqueueAttempts);
+        Assert.Empty(notifier.Messages);
+
+        notifier.Accept = true;
+        await monitor.Report("rule", MonitorResult.Unhealthy("still down"), sustain: Sustain120);
+        Assert.Equal(3, notifier.EnqueueAttempts);
+        var alert = Assert.Single(notifier.Messages);
+        Assert.True(alert.IsWarning);
+        Assert.Equal("still down", alert.Body);
+
+        await monitor.Report("rule", MonitorResult.Healthy("up"), sustain: Sustain120);
+        Assert.Equal(2, notifier.Messages.Count);
+        Assert.False(notifier.Messages[1].IsWarning);
+    }
+
+    [Fact]
+    public async Task ClockRollback_ResetsWindowInsteadOfHoldingForever()
+    {
+        var notifier = new CollectingNotifier();
+        var monitor = new ProbeMonitor(notifier, BreachAt);
+
+        await monitor.Report("rule", MonitorResult.Unhealthy("memory 97.7%"), sustain: Sustain120);
+        monitor.Advance(TimeSpan.FromSeconds(60));
+        await monitor.Report("rule", MonitorResult.Unhealthy("memory 97.7%"), sustain: Sustain120);
+        Assert.Empty(notifier.Messages);
+
+        // NTP 把墙上时钟往回调 5 分钟：旧起点会让 elapsed 为负，若不重置则告警被永久压住。
+        monitor.Advance(TimeSpan.FromMinutes(-5));
+        await monitor.Report("rule", MonitorResult.Unhealthy("memory 97.7%"), sustain: Sustain120);
+        Assert.Empty(notifier.Messages);
+
+        // 起点已重置为回拨后的时刻，再走完一个完整窗口即可告警。
+        monitor.Advance(Sustain120);
+        await monitor.Report("rule", MonitorResult.Unhealthy("memory 97.7%"), sustain: Sustain120);
+        var alert = Assert.Single(notifier.Messages);
+        Assert.True(alert.IsWarning);
+    }
+
+    [Fact]
     public async Task NotifyFalseSamples_StillAgeTheWindow()
     {
         var notifier = new CollectingNotifier();
