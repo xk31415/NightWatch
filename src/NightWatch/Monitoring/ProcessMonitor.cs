@@ -61,7 +61,8 @@ public class ProcessMonitor : PollingMonitorBase
                 continue;
 
             var result = await CheckRuleAsync(rule, ct);
-            await ReportAsync(rule.Name, result, ct, Minutes(rule.CooldownMinutes), suppress);
+            await ReportAsync(rule.Name, result, ct, Minutes(rule.CooldownMinutes), suppress,
+                SustainWindow(rule.SustainSeconds));
         }
     }
 

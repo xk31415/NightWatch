@@ -50,8 +50,14 @@ public class ProcessRule
     /// <summary>检查间隔（秒）。</summary>
     public int IntervalSeconds { get; set; } = 30;
 
-    /// <summary>同类告警的冷却时间（分钟），防止轰炸。</summary>
+    /// <summary>同类告警的冷却时间（分钟），防止轰炸。只节流已经发出的重复告警。</summary>
     public int CooldownMinutes { get; set; } = 10;
+
+    /// <summary>
+    /// 首次告警前须连续异常至少这么多秒；窗口内恢复则不告警、也不发恢复通知。
+    /// 0 = 立即告警（默认）。告警发出之后的重复通知仍由 <see cref="CooldownMinutes"/> 节流。
+    /// </summary>
+    public int SustainSeconds { get; set; } = 0;
 
     /// <summary>窗口程序无响应时是否强杀重启。</summary>
     public bool RestartIfNotResponding { get; set; } = false;
@@ -82,6 +88,12 @@ public class ServiceRule
     public int IntervalSeconds { get; set; } = 60;
     public int CooldownMinutes { get; set; } = 10;
 
+    /// <summary>
+    /// 首次告警前须连续异常至少这么多秒；窗口内恢复则不告警、也不发恢复通知。
+    /// 0 = 立即告警（默认）。告警发出之后的重复通知仍由 <see cref="CooldownMinutes"/> 节流。
+    /// </summary>
+    public int SustainSeconds { get; set; } = 0;
+
     /// <summary>该规则的监控/告警时段；不写则继承全局 Schedule。</summary>
     public ScheduleRule? Schedule { get; set; }
 }
@@ -104,6 +116,12 @@ public class FileRule
 
     public int IntervalSeconds { get; set; } = 60;
     public int CooldownMinutes { get; set; } = 30;
+
+    /// <summary>
+    /// 首次告警前须连续异常至少这么多秒；窗口内恢复则不告警、也不发恢复通知。
+    /// 0 = 立即告警（默认）。告警发出之后的重复通知仍由 <see cref="CooldownMinutes"/> 节流。
+    /// </summary>
+    public int SustainSeconds { get; set; } = 0;
 
     /// <summary>该规则的监控/告警时段；不写则继承全局 Schedule。</summary>
     public ScheduleRule? Schedule { get; set; }
@@ -130,6 +148,12 @@ public class HeartbeatRule
     public int IntervalSeconds { get; set; } = 60;
     public int CooldownMinutes { get; set; } = 10;
 
+    /// <summary>
+    /// 首次告警前须连续异常至少这么多秒；窗口内恢复则不告警、也不发恢复通知。
+    /// 0 = 立即告警（默认）。告警发出之后的重复通知仍由 <see cref="CooldownMinutes"/> 节流。
+    /// </summary>
+    public int SustainSeconds { get; set; } = 0;
+
     /// <summary>是否允许心跳超时后杀进程并拉起。安全自检失败时会关闭，监控与告警保留。</summary>
     public bool AllowLaunch { get; set; } = true;
 
@@ -142,6 +166,13 @@ public class ResourceRule
 {
     public int IntervalSeconds { get; set; } = 60;
     public int CooldownMinutes { get; set; } = 30;
+
+    /// <summary>
+    /// 首次告警前须连续越限至少这么多秒；窗口内恢复则不告警、也不发恢复通知。
+    /// 0 = 立即告警（默认，不会当成 120）。内存/CPU/磁盘抖动可设为 120（2 分钟）。
+    /// 告警发出之后的重复通知仍由 <see cref="CooldownMinutes"/> 节流。
+    /// </summary>
+    public int SustainSeconds { get; set; } = 0;
 
     /// <summary>CPU 使用率阈值（%），超过则告警；0 = 关闭。</summary>
     public double CpuPercent { get; set; } = 0;
@@ -191,8 +222,14 @@ public class HttpHeartbeatOptions
     /// <summary>检查间隔（秒）。</summary>
     public int IntervalSeconds { get; set; } = 60;
 
-    /// <summary>同类告警冷却（分钟）。</summary>
+    /// <summary>同类告警冷却（分钟）。只节流已经发出的重复告警。</summary>
     public int CooldownMinutes { get; set; } = 10;
+
+    /// <summary>
+    /// 首次告警前须连续异常至少这么多秒；窗口内恢复则不告警、也不发恢复通知。
+    /// 0 = 立即告警（默认）。告警发出之后的重复通知仍由 <see cref="CooldownMinutes"/> 节流。
+    /// </summary>
+    public int SustainSeconds { get; set; } = 0;
 
     /// <summary>动态心跳键的保留时间（分钟，支持小数）；超时未上报达到该时长后移除，0 = 不清理。</summary>
     public double RetentionMinutes { get; set; } = 60;
