@@ -36,7 +36,7 @@ public class FileLogMonitor : PollingMonitorBase
 
             var result = CheckRule(rule);
             await ReportAsync(rule.Name, result, ct, Minutes(rule.CooldownMinutes), suppress,
-                SustainWindow(rule.SustainMinutes));
+                SustainWindow(rule.SustainSeconds));
         }
     }
 

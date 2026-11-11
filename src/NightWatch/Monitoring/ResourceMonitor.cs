@@ -79,7 +79,7 @@ public class ResourceMonitor : PollingMonitorBase
             ? MonitorResult.Unhealthy(string.Join("; ", problems))
             : MonitorResult.Healthy("系统资源正常");
         await ReportAsync(key, result, ct, Minutes(_rule.CooldownMinutes), suppress,
-            SustainWindow(_rule.SustainMinutes));
+            SustainWindow(_rule.SustainSeconds));
     }
 
     public override void Dispose()

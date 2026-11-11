@@ -39,7 +39,7 @@ public class ServiceMonitor : PollingMonitorBase
 
             var result = await Task.Run(() => CheckRule(rule), ct);
             await ReportAsync(rule.Name, result, ct, Minutes(rule.CooldownMinutes), suppress,
-                SustainWindow(rule.SustainMinutes));
+                SustainWindow(rule.SustainSeconds));
         }
     }
 

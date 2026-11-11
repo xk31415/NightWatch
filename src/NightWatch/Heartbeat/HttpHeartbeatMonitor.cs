@@ -63,7 +63,7 @@ public class HttpHeartbeatMonitor : PollingMonitorBase
                 : MonitorResult.Healthy($"{kv.Key} 心跳正常（{ageMinutes * 60:F0} 秒前上报）");
 
             await ReportAsync(kv.Key, result, ct, Minutes(_options.CooldownMinutes), suppress,
-                SustainWindow(_options.SustainMinutes));
+                SustainWindow(_options.SustainSeconds));
         }
 
         // 2. 必达清单：从未上报过的键
@@ -76,7 +76,7 @@ public class HttpHeartbeatMonitor : PollingMonitorBase
                     ? $"必达心跳缺失: {key} 超过保留期未再上报"
                     : $"必达心跳缺失: {key} 从未上报过心跳");
                 await ReportAsync(key, result, ct, Minutes(_options.CooldownMinutes), suppress,
-                    SustainWindow(_options.SustainMinutes));
+                    SustainWindow(_options.SustainSeconds));
             }
         }
     }

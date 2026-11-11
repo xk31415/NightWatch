@@ -62,7 +62,7 @@ public class FileHeartbeatMonitor : PollingMonitorBase
 
             var result = CheckRule(rule, ct);
             await ReportAsync(rule.Name, result, ct, Minutes(rule.CooldownMinutes), suppress,
-                SustainWindow(rule.SustainMinutes));
+                SustainWindow(rule.SustainSeconds));
         }
     }
 

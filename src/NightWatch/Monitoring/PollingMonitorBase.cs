@@ -231,14 +231,14 @@ public abstract class PollingMonitorBase : BackgroundService
             if (justStarted)
             {
                 Logger.LogInformation(
-                    "[{Monitor}] {Rule}: 异常未持续满 {SustainMinutes} 分钟，暂不告警；窗口内恢复则不发送告警和恢复通知",
-                    MonitorName, ruleKey, sustainWindow.TotalMinutes);
+                    "[{Monitor}] {Rule}: 异常未持续满 {SustainSeconds:F0} 秒，暂不告警；窗口内恢复则不发送告警和恢复通知",
+                    MonitorName, ruleKey, sustainWindow.TotalSeconds);
             }
             else
             {
                 Logger.LogDebug(
-                    "[{Monitor}] {Rule}: 异常已持续 {ElapsedSeconds:F0} 秒，未满 {SustainMinutes} 分钟，仍暂不告警",
-                    MonitorName, ruleKey, elapsed.TotalSeconds, sustainWindow.TotalMinutes);
+                    "[{Monitor}] {Rule}: 异常已持续 {ElapsedSeconds:F0} 秒，未满 {SustainSeconds:F0} 秒，仍暂不告警",
+                    MonitorName, ruleKey, elapsed.TotalSeconds, sustainWindow.TotalSeconds);
             }
 
             return;
@@ -314,6 +314,6 @@ public abstract class PollingMonitorBase : BackgroundService
 
     protected static TimeSpan Minutes(int m) => TimeSpan.FromMinutes(Math.Max(1, m));
 
-    /// <summary>首次告警持续窗口。0 与负数都表示不推迟，第一次越限立即告警。</summary>
-    protected static TimeSpan SustainWindow(int minutes) => TimeSpan.FromMinutes(Math.Max(0, minutes));
+    /// <summary>首次告警持续窗口（秒）。0 与负数都表示不推迟，第一次越限立即告警。</summary>
+    protected static TimeSpan SustainWindow(int seconds) => TimeSpan.FromSeconds(Math.Max(0, seconds));
 }

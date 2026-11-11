@@ -13,7 +13,7 @@ namespace NightWatch.Tests;
 public class SustainWindowTests
 {
     private static readonly DateTime BreachAt = new(2026, 11, 11, 0, 56, 58, DateTimeKind.Utc);
-    private static readonly TimeSpan TwoMinutes = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan Sustain120 = TimeSpan.FromSeconds(120);
 
     [Fact]
     public async Task SustainZero_AlertsImmediately_AndCooldownStillApplies()
@@ -43,15 +43,15 @@ public class SustainWindowTests
         var notifier = new CollectingNotifier();
         var monitor = new ProbeMonitor(notifier, BreachAt);
 
-        await monitor.Report("rule", MonitorResult.Unhealthy("memory 97.7%"), sustain: TwoMinutes);
+        await monitor.Report("rule", MonitorResult.Unhealthy("memory 97.7%"), sustain: Sustain120);
         Assert.Empty(notifier.Messages);
 
-        monitor.Advance(TwoMinutes - TimeSpan.FromSeconds(1));
-        await monitor.Report("rule", MonitorResult.Unhealthy("memory 97.7%"), sustain: TwoMinutes);
+        monitor.Advance(Sustain120 - TimeSpan.FromSeconds(1));
+        await monitor.Report("rule", MonitorResult.Unhealthy("memory 97.7%"), sustain: Sustain120);
         Assert.Empty(notifier.Messages);
 
         monitor.Advance(TimeSpan.FromSeconds(1));
-        await monitor.Report("rule", MonitorResult.Unhealthy("memory 97.7%"), sustain: TwoMinutes);
+        await monitor.Report("rule", MonitorResult.Unhealthy("memory 97.7%"), sustain: Sustain120);
 
         var alert = Assert.Single(notifier.Messages);
         Assert.True(alert.IsWarning);
@@ -64,9 +64,9 @@ public class SustainWindowTests
         var notifier = new CollectingNotifier();
         var monitor = new ProbeMonitor(notifier, BreachAt);
 
-        await monitor.Report("rule", MonitorResult.Unhealthy("memory 97.7%"), sustain: TwoMinutes);
+        await monitor.Report("rule", MonitorResult.Unhealthy("memory 97.7%"), sustain: Sustain120);
         monitor.Advance(TimeSpan.FromMinutes(1));
-        await monitor.Report("rule", MonitorResult.Healthy("memory 80%"), sustain: TwoMinutes);
+        await monitor.Report("rule", MonitorResult.Healthy("memory 80%"), sustain: Sustain120);
 
         Assert.Empty(notifier.Messages);
     }
@@ -77,17 +77,17 @@ public class SustainWindowTests
         var notifier = new CollectingNotifier();
         var monitor = new ProbeMonitor(notifier, BreachAt);
 
-        await monitor.Report("rule", MonitorResult.Unhealthy("blip"), sustain: TwoMinutes);
+        await monitor.Report("rule", MonitorResult.Unhealthy("blip"), sustain: Sustain120);
         monitor.Advance(TimeSpan.FromMinutes(1));
-        await monitor.Report("rule", MonitorResult.Healthy("recovered"), sustain: TwoMinutes);
+        await monitor.Report("rule", MonitorResult.Healthy("recovered"), sustain: Sustain120);
         Assert.Empty(notifier.Messages);
 
         monitor.Advance(TimeSpan.FromMinutes(10));
-        await monitor.Report("rule", MonitorResult.Unhealthy("real"), sustain: TwoMinutes);
+        await monitor.Report("rule", MonitorResult.Unhealthy("real"), sustain: Sustain120);
         Assert.Empty(notifier.Messages);
 
-        monitor.Advance(TwoMinutes);
-        await monitor.Report("rule", MonitorResult.Unhealthy("real"), sustain: TwoMinutes);
+        monitor.Advance(Sustain120);
+        await monitor.Report("rule", MonitorResult.Unhealthy("real"), sustain: Sustain120);
 
         var alert = Assert.Single(notifier.Messages);
         Assert.True(alert.IsWarning);
@@ -100,20 +100,20 @@ public class SustainWindowTests
         var notifier = new CollectingNotifier();
         var monitor = new ProbeMonitor(notifier, BreachAt);
 
-        await monitor.Report("rule", MonitorResult.Unhealthy("blip"), sustain: TwoMinutes);
+        await monitor.Report("rule", MonitorResult.Unhealthy("blip"), sustain: Sustain120);
         monitor.Advance(TimeSpan.FromMinutes(1));
-        await monitor.Report("rule", MonitorResult.Healthy("back"), sustain: TwoMinutes);
+        await monitor.Report("rule", MonitorResult.Healthy("back"), sustain: Sustain120);
         Assert.Empty(notifier.Messages);
 
-        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: TwoMinutes);
+        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: Sustain120);
         Assert.Empty(notifier.Messages);
-        monitor.Advance(TwoMinutes);
-        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: TwoMinutes);
+        monitor.Advance(Sustain120);
+        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: Sustain120);
         Assert.Single(notifier.Messages);
         Assert.True(notifier.Messages[0].IsWarning);
 
-        await monitor.Report("rule", MonitorResult.Healthy("up"), sustain: TwoMinutes);
-        await monitor.Report("rule", MonitorResult.Healthy("up"), sustain: TwoMinutes);
+        await monitor.Report("rule", MonitorResult.Healthy("up"), sustain: Sustain120);
+        await monitor.Report("rule", MonitorResult.Healthy("up"), sustain: Sustain120);
 
         Assert.Equal(2, notifier.Messages.Count);
         Assert.False(notifier.Messages[1].IsWarning);
@@ -125,7 +125,7 @@ public class SustainWindowTests
     {
         var notifier = new CollectingNotifier();
         var monitor = new ProbeMonitor(notifier, BreachAt);
-        var sustain = TimeSpan.FromMinutes(5);
+        var sustain = TimeSpan.FromSeconds(300);
         var cooldown = TimeSpan.FromMinutes(1);
 
         await monitor.Report("rule", MonitorResult.Unhealthy("down"), cooldown, sustain);
@@ -153,23 +153,23 @@ public class SustainWindowTests
         var notifier = new RejectingQueuedNotifier();
         var monitor = new ProbeMonitor(notifier, BreachAt);
 
-        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: TwoMinutes);
+        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: Sustain120);
         Assert.Equal(0, notifier.EnqueueAttempts);
 
-        monitor.Advance(TwoMinutes);
-        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: TwoMinutes);
+        monitor.Advance(Sustain120);
+        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: Sustain120);
         Assert.Equal(1, notifier.EnqueueAttempts);
         Assert.Empty(notifier.Messages);
 
-        await monitor.Report("rule", MonitorResult.Healthy("up"), sustain: TwoMinutes);
+        await monitor.Report("rule", MonitorResult.Healthy("up"), sustain: Sustain120);
         Assert.Empty(notifier.Messages);
 
         notifier.Accept = true;
-        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: TwoMinutes);
+        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: Sustain120);
         Assert.Empty(notifier.Messages);
 
-        monitor.Advance(TwoMinutes);
-        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: TwoMinutes);
+        monitor.Advance(Sustain120);
+        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: Sustain120);
         var alert = Assert.Single(notifier.Messages);
         Assert.True(alert.IsWarning);
     }
@@ -180,12 +180,12 @@ public class SustainWindowTests
         var notifier = new CollectingNotifier();
         var monitor = new ProbeMonitor(notifier, BreachAt);
 
-        await monitor.Report("rule", MonitorResult.Unhealthy("backing off", notify: false), sustain: TwoMinutes);
-        monitor.Advance(TwoMinutes);
-        await monitor.Report("rule", MonitorResult.Unhealthy("backing off", notify: false), sustain: TwoMinutes);
+        await monitor.Report("rule", MonitorResult.Unhealthy("backing off", notify: false), sustain: Sustain120);
+        monitor.Advance(Sustain120);
+        await monitor.Report("rule", MonitorResult.Unhealthy("backing off", notify: false), sustain: Sustain120);
         Assert.Empty(notifier.Messages);
 
-        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: TwoMinutes);
+        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: Sustain120);
         var alert = Assert.Single(notifier.Messages);
         Assert.Equal("down", alert.Body);
     }
@@ -196,7 +196,7 @@ public class SustainWindowTests
         var notifier = new CollectingNotifier();
         var monitor = new ProbeMonitor(notifier, BreachAt);
 
-        await monitor.Report("held", MonitorResult.Unhealthy("waiting"), sustain: TwoMinutes);
+        await monitor.Report("held", MonitorResult.Unhealthy("waiting"), sustain: Sustain120);
         await monitor.Report("now", MonitorResult.Unhealthy("immediate"), sustain: TimeSpan.Zero);
 
         var alert = Assert.Single(notifier.Messages);
@@ -210,16 +210,27 @@ public class SustainWindowTests
         var notifier = new CollectingNotifier();
         var monitor = new ProbeMonitor(notifier, BreachAt);
 
-        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: TwoMinutes, suppress: true);
+        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: Sustain120, suppress: true);
         Assert.Empty(notifier.Messages);
 
         monitor.Advance(TimeSpan.FromSeconds(30));
-        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: TwoMinutes, suppress: false);
+        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: Sustain120, suppress: false);
         Assert.Empty(notifier.Messages);
 
-        monitor.Advance(TwoMinutes - TimeSpan.FromSeconds(30));
-        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: TwoMinutes, suppress: false);
+        monitor.Advance(Sustain120 - TimeSpan.FromSeconds(30));
+        await monitor.Report("rule", MonitorResult.Unhealthy("down"), sustain: Sustain120, suppress: false);
         Assert.Single(notifier.Messages);
+    }
+
+    [Fact]
+    public void SustainSeconds_DefaultsToZero_OnEveryRule()
+    {
+        Assert.Equal(0, new ProcessRule().SustainSeconds);
+        Assert.Equal(0, new ServiceRule().SustainSeconds);
+        Assert.Equal(0, new FileRule().SustainSeconds);
+        Assert.Equal(0, new HeartbeatRule().SustainSeconds);
+        Assert.Equal(0, new ResourceRule().SustainSeconds);
+        Assert.Equal(0, new HttpHeartbeatOptions().SustainSeconds);
     }
 
     [Fact]
@@ -227,7 +238,7 @@ public class SustainWindowTests
     {
         var notifier = new CollectingNotifier();
         var metrics = new FakeMetrics { MemoryPercent = 97.7 };
-        var monitor = new ClockedResourceMonitor(ResourceOptions(sustainMinutes: 0), notifier, metrics, BreachAt);
+        var monitor = new ClockedResourceMonitor(ResourceOptions(sustainSeconds: 0), notifier, metrics, BreachAt);
 
         await monitor.RunOnce();
 
@@ -237,24 +248,24 @@ public class SustainWindowTests
     }
 
     [Fact]
-    public async Task ResourceMonitor_SustainTwoMinutes_HoldsThenAlertsThenRecovers()
+    public async Task ResourceMonitor_Sustain120Seconds_HoldsThenAlertsThenRecovers()
     {
         var notifier = new CollectingNotifier();
         var metrics = new FakeMetrics { MemoryPercent = 97.7 };
-        var monitor = new ClockedResourceMonitor(ResourceOptions(sustainMinutes: 2), notifier, metrics, BreachAt);
+        var monitor = new ClockedResourceMonitor(ResourceOptions(sustainSeconds: 120), notifier, metrics, BreachAt);
 
         await monitor.RunOnce();
-        monitor.Advance(TimeSpan.FromMinutes(1));
+        monitor.Advance(TimeSpan.FromSeconds(60));
         await monitor.RunOnce();
         Assert.Empty(notifier.Messages);
 
-        monitor.Advance(TimeSpan.FromMinutes(1));
+        monitor.Advance(TimeSpan.FromSeconds(60));
         await monitor.RunOnce();
         var alert = Assert.Single(notifier.Messages);
         Assert.Contains("内存使用率 97.7%", alert.Body);
         Assert.Contains("95%", alert.Body);
 
-        monitor.Advance(TimeSpan.FromMinutes(1));
+        monitor.Advance(TimeSpan.FromSeconds(60));
         await monitor.RunOnce();
         Assert.Single(notifier.Messages);
 
@@ -264,13 +275,13 @@ public class SustainWindowTests
         Assert.Contains("已恢复正常", notifier.Messages[1].Body);
     }
 
-    private static WatchDogOptions ResourceOptions(int sustainMinutes) => new()
+    private static WatchDogOptions ResourceOptions(int sustainSeconds) => new()
     {
         Resources = new ResourceRule
         {
             IntervalSeconds = 60,
             CooldownMinutes = 30,
-            SustainMinutes = sustainMinutes,
+            SustainSeconds = sustainSeconds,
             CpuPercent = 0,
             MemoryPercent = 95
         }
