@@ -6,6 +6,7 @@ namespace NightWatch.Monitoring;
 /// <summary>
 /// 轮询型监控器基类：按固定间隔循环执行 CheckAsync，
 /// 异常结果记日志并推送通知，且按规则键做冷却节流防止告警轰炸。
+/// 可选持续窗口：异常须连续保持一段时间才发第一次告警，窗口内恢复则不通知。
 /// 支持按规则的监控/告警时段：时段外可只静默告警（继续监控与拉起），或完全停止检查。
 /// </summary>
 public abstract class PollingMonitorBase : BackgroundService
@@ -16,8 +17,13 @@ public abstract class PollingMonitorBase : BackgroundService
     /// <summary>当前处于异常状态的规则（与是否推送无关，用于状态机判定）。</summary>
     private readonly HashSet<string> _unhealthyRules = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>本轮异常从何时开始。只在配置了持续窗口时写入，恢复健康后清除。</summary>
+    private readonly Dictionary<string, DateTime> _unhealthySinceUtc = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>本轮到异常期间真正推送过告警的规则：只有它们恢复时才发恢复通知。</summary>
     private readonly HashSet<string> _alertedRules = new(StringComparer.OrdinalIgnoreCase);
+
+    private Func<DateTime> _utcNow = static () => DateTime.UtcNow;
 
     private readonly Dictionary<string, DateTime> _nextCheckUtc = new(StringComparer.OrdinalIgnoreCase);
 
@@ -30,6 +36,12 @@ public abstract class PollingMonitorBase : BackgroundService
     {
         _notifier = notifier;
         Logger = logger;
+    }
+
+    /// <summary>测试注入 UTC 时钟。生产路径不调用，报告逻辑使用 <see cref="DateTime.UtcNow"/>。</summary>
+    internal void UseUtcNow(Func<DateTime> utcNow)
+    {
+        _utcNow = utcNow ?? throw new ArgumentNullException(nameof(utcNow));
     }
 
     /// <summary>监控器名称（用于日志前缀）。</summary>
@@ -135,6 +147,7 @@ public abstract class PollingMonitorBase : BackgroundService
     {
         _lastAlertUtc.Remove(ruleKey);
         _unhealthyRules.Remove(ruleKey);
+        _unhealthySinceUtc.Remove(ruleKey);
         _alertedRules.Remove(ruleKey);
         _nextCheckUtc.Remove(ruleKey);
         _windowActive.Remove(ruleKey);
@@ -143,17 +156,23 @@ public abstract class PollingMonitorBase : BackgroundService
     /// <summary>
     /// 上报某条规则的检查结果：异常按冷却期推送；从异常恢复到健康时推送一次恢复通知。
     /// 初次启动即为健康的规则不会推送。
-    /// 恢复通知只在“本轮异常期间确实推送过告警”时发送：被去重/退避抑制、从未告警过的
-    /// 短暂异常不打扰运维，但状态仍然记录，避免抑制分支把恢复通知吞掉。
+    /// 恢复通知只在“本轮异常期间确实推送过告警”时发送：被去重/退避抑制、持续窗口内恢复、
+    /// 从未告警过的短暂异常不打扰运维，但状态仍然记录，避免抑制分支把恢复通知吞掉。
     /// 注意：告警只有在通知器「确实接受」后才占用冷却 / 记为已告警（队列满被拒时下轮重试），
     /// 否则会出现「漏告警 + 恢复时发一条孤立的已恢复正常」。
     /// </summary>
-    /// <param name="cooldown">该规则的告警冷却时间；不传则用监控器默认值。</param>
+    /// <param name="cooldown">该规则的告警冷却时间；不传则用监控器默认值。只节流已经发出的重复告警。</param>
     /// <param name="suppressNotifications">
-    /// true 时只记日志、不推送（时段外 NoAlert）。此时也不占用告警冷却：时段恢复后若仍异常会立即推送。
+    /// true 时只记日志、不推送（时段外 NoAlert）。此时也不占用告警冷却。
+    /// 时段恢复后若仍异常：未配置持续窗口则立即推送；配置了则从第一次异常起等窗口走完再推送。
+    /// </param>
+    /// <param name="sustain">
+    /// 首次告警前的持续窗口。异常须从第一次观察到起连续保持至少这么久，才推送第一次告警；
+    /// 窗口内恢复则不告警、也不发恢复通知。null、零或负数表示立即告警（默认，与旧行为一致）。
+    /// 本轮已经成功告警之后不再用它推迟，重复告警仍只受 <paramref name="cooldown"/> 约束。
     /// </param>
     protected async Task ReportAsync(string ruleKey, MonitorResult result, CancellationToken ct,
-        TimeSpan? cooldown = null, bool suppressNotifications = false)
+        TimeSpan? cooldown = null, bool suppressNotifications = false, TimeSpan? sustain = null)
     {
         var alertCooldown = cooldown ?? AlertCooldown;
         if (result.IsHealthy)
@@ -162,6 +181,7 @@ public abstract class PollingMonitorBase : BackgroundService
             // 从异常恢复仍记 Information，并在下方推送一次恢复通知。
             Logger.LogDebug("[{Monitor}] {Rule}: {Message}", MonitorName, ruleKey, result.Message);
             _lastAlertUtc.Remove(ruleKey);
+            _unhealthySinceUtc.Remove(ruleKey);
 
             var wasUnhealthy = _unhealthyRules.Remove(ruleKey);
             var wasAlerted = _alertedRules.Remove(ruleKey);
@@ -194,6 +214,9 @@ public abstract class PollingMonitorBase : BackgroundService
         // 先记状态，再看是否推送：否则 Notify=false 的分支会让后续恢复无处可比。
         _unhealthyRules.Add(ruleKey);
 
+        var now = _utcNow();
+        var holdForSustain = HoldForSustain(ruleKey, sustain, now, out var sustainWindow, out var elapsed, out var justStarted);
+
         if (!result.Notify)
             return;
 
@@ -203,7 +226,24 @@ public abstract class PollingMonitorBase : BackgroundService
             return;
         }
 
-        var now = DateTime.UtcNow;
+        if (holdForSustain)
+        {
+            if (justStarted)
+            {
+                Logger.LogInformation(
+                    "[{Monitor}] {Rule}: 异常未持续满 {SustainMinutes} 分钟，暂不告警；窗口内恢复则不发送告警和恢复通知",
+                    MonitorName, ruleKey, sustainWindow.TotalMinutes);
+            }
+            else
+            {
+                Logger.LogDebug(
+                    "[{Monitor}] {Rule}: 异常已持续 {ElapsedSeconds:F0} 秒，未满 {SustainMinutes} 分钟，仍暂不告警",
+                    MonitorName, ruleKey, elapsed.TotalSeconds, sustainWindow.TotalMinutes);
+            }
+
+            return;
+        }
+
         if (_lastAlertUtc.TryGetValue(ruleKey, out var last) && now - last < alertCooldown)
         {
             Logger.LogDebug("[{Monitor}] {Rule} 处于告警冷却期，跳过外部通知", MonitorName, ruleKey);
@@ -212,6 +252,7 @@ public abstract class PollingMonitorBase : BackgroundService
 
         // 先投递、后记状态：队列满（TryNotifyAsync 返回 false）时本轮不占用冷却，
         // 下一轮检查会重试，避免「告警没发出去、规则却静默 10 分钟」。
+        // 持续窗口的计时不因投递失败而清掉：窗口已满时下轮直接重试，不再重新等待。
         if (!await TryNotifyAsync(new AlertMessage
         {
             Title = $"{MonitorName} / {ruleKey}",
@@ -226,6 +267,33 @@ public abstract class PollingMonitorBase : BackgroundService
 
         _lastAlertUtc[ruleKey] = now;
         _alertedRules.Add(ruleKey);
+    }
+
+    /// <summary>
+    /// 持续窗口尚未走完时返回 true，调用方应跳过本次通知。
+    /// 时钟从本轮第一次观察到异常起算；已经成功告警过的同一轮不再推迟。
+    /// </summary>
+    private bool HoldForSustain(string ruleKey, TimeSpan? sustain, DateTime now,
+        out TimeSpan sustainWindow, out TimeSpan elapsed, out bool justStarted)
+    {
+        sustainWindow = sustain.GetValueOrDefault();
+        if (sustainWindow < TimeSpan.Zero)
+            sustainWindow = TimeSpan.Zero;
+
+        elapsed = TimeSpan.Zero;
+        justStarted = false;
+        if (sustainWindow <= TimeSpan.Zero || _alertedRules.Contains(ruleKey))
+            return false;
+
+        if (!_unhealthySinceUtc.TryGetValue(ruleKey, out var since))
+        {
+            since = now;
+            _unhealthySinceUtc[ruleKey] = since;
+            justStarted = true;
+        }
+
+        elapsed = now - since;
+        return elapsed < sustainWindow;
     }
 
     /// <summary>
@@ -245,4 +313,7 @@ public abstract class PollingMonitorBase : BackgroundService
     protected virtual TimeSpan AlertCooldown { get; } = TimeSpan.FromMinutes(10);
 
     protected static TimeSpan Minutes(int m) => TimeSpan.FromMinutes(Math.Max(1, m));
+
+    /// <summary>首次告警持续窗口。0 与负数都表示不推迟，第一次越限立即告警。</summary>
+    protected static TimeSpan SustainWindow(int minutes) => TimeSpan.FromMinutes(Math.Max(0, minutes));
 }

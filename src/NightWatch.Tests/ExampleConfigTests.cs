@@ -35,6 +35,10 @@ public class ExampleConfigTests
         Assert.NotEmpty(options.Services);
         Assert.NotEmpty(options.Resources.Disks);
         Assert.False(string.IsNullOrWhiteSpace(options.Processes[0].Name));
+        // 示例把资源抖动缓冲开成 2 分钟；没写 SustainMinutes 的规则保持立即告警。
+        Assert.Equal(2, options.Resources.SustainMinutes);
+        Assert.Equal(0, options.Processes[0].SustainMinutes);
+        Assert.Equal(0, options.Services[0].SustainMinutes);
     }
 
     [Fact]

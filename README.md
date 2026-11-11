@@ -374,9 +374,11 @@ Windows 用 `appsettings.example.json`，Linux 用 `appsettings.example.linux.js
 | `Files` | 文件 / 日志 | `Name`、`Path`、`Pattern`、`StaleMinutes`（0 关闭）、`MaxSizeMB`（0 关闭） |
 | `FileHeartbeats` | 文件心跳 | `Name`、`HeartbeatFile`、`StaleMinutes`、可选 `ProcessName` / `FilePath` |
 | `HttpHeartbeat` | HTTP 心跳 | 见下文 |
-| `Resources` | 资源 | `CpuPercent`、`MemoryPercent`（0 关闭）、`Disks`（Windows 填盘符 `C:`，Linux 填挂载点 `/`） |
+| `Resources` | 资源 | `CpuPercent`、`MemoryPercent`（0 关闭）、`Disks`（Windows 填盘符 `C:`，Linux 填挂载点 `/`）、`SustainMinutes`（建议 2） |
 
-监控项通用字段：`IntervalSeconds`（最短 5 秒）、`CooldownMinutes`。每条规则按自己的间隔检查。存活判定和结束进程以可执行文件完整路径为准，不用同名进程冒充；配置了 `FilePath` 时会按可执行文件名自动枚举，因此 `ProcessName` 与实际文件名不一致也不会漏判。
+监控项通用字段：`IntervalSeconds`（最短 5 秒）、`CooldownMinutes`、`SustainMinutes`。每条规则按自己的间隔检查。存活判定和结束进程以可执行文件完整路径为准，不用同名进程冒充；配置了 `FilePath` 时会按可执行文件名自动枚举，因此 `ProcessName` 与实际文件名不一致也不会漏判。
+
+`CooldownMinutes` 只管告警已经发出之后的重复通知间隔。`SustainMinutes` 只管第一次告警要不要再等一等：异常必须连续保持至少这么多分钟，才发第一次告警；这段时间内恢复，则告警和恢复通知都不发。不写或写 `0` 就是立即告警，这是默认值。进程、服务这类需要马上知道「已经挂了」的规则保持默认即可。内存、CPU、磁盘的短暂冲高把 `Resources.SustainMinutes` 设为 `2`。检查间隔应短于这个窗口（资源监控默认 60 秒，配 2 分钟即可）：下一次检查时若仍异常、并且从第一次越限起已经满了窗口，才会推送。窗口走完并且告警真正发出之后，恢复通知和 `CooldownMinutes` 仍按原来的规则。持续窗口只推迟外部通知，不推迟自动拉起：进程或服务在检查到异常的当次仍会按原规则重启。
 
 每条规则还可以用 `Schedule` 限定监控/告警时段（见下节），不写则继承全局设置。
 
@@ -609,6 +611,7 @@ netsh advfirewall firewall add rule name="NightWatch HTTP" dir=in action=allow p
 "Resources": {
   "IntervalSeconds": 60,
   "CooldownMinutes": 30,
+  "SustainMinutes": 2,
   "CpuPercent": 90,
   "MemoryPercent": 90,
   "Disks": [
@@ -616,6 +619,8 @@ netsh advfirewall firewall add rule name="NightWatch HTTP" dir=in action=allow p
   ]
 }
 ```
+
+`SustainMinutes: 2` 表示 CPU、内存或磁盘要连续越限满 2 分钟，才发第一次资源告警。中间恢复（例如内存冲到 97% 后约一分钟回落）则不发告警，也不会跟着发一条「已恢复正常」。写成 `0` 或不写该字段时，发现越限的当次检查就会告警。
 
 阈值为 `0` 的项不检查。未配置任何磁盘且 CPU/内存都为 0 时，资源监控器不启动。`Disks[].Drive` 在 Windows 写盘符（`C:`），Linux 写挂载点（`/`、`/data`）。CPU/内存采集：Windows 用性能计数器与 `GlobalMemoryStatusEx`，Linux 读 `/proc/stat` 与 `/proc/meminfo`。
 
@@ -634,7 +639,7 @@ Linux 上内存优先读 **cgroup v2** 限额（`/sys/fs/cgroup/memory.current` 
 
 改系统环境变量后必须重启服务。日志级别为 Information。每条规则的异常，以及从异常恢复，会写入文件；持续健康的轮询结果是 Debug，避免正常运行时刷屏。
 
-告警经有界队列（默认 256 条）异步投递：队列满时丢弃并记 WRN，停机时最多等 5 秒排空，避免 SMTP 超时拖住监控。恢复通知只在本次异常期间确实推送过告警时发送。
+告警经有界队列（默认 256 条）异步投递：队列满时丢弃并记 WRN，停机时最多等 5 秒排空，避免 SMTP 超时拖住监控。恢复通知只在本次异常期间确实推送过告警时发送。`SustainMinutes` 大于 0 时，未满持续窗口就恢复的异常不会推送，因此也没有恢复通知。
 
 ## 常见问题
 
@@ -690,7 +695,7 @@ src/
 │   │   ├── HttpHeartbeatMonitor.cs    # HTTP 心跳超时检查
 │   │   └── FileHeartbeatMonitor.cs    # 文件心跳
 │   ├── Monitoring/
-│   │   ├── PollingMonitorBase.cs      # 轮询、冷却、恢复通知
+│   │   ├── PollingMonitorBase.cs      # 轮询、持续窗口、冷却、恢复通知
 │   │   ├── ProcessLaunchCoordinator.cs# 跨监控器拉起去重
 │   │   ├── RestartBackoff.cs          # 进程 / 文件心跳共用的拉起退避
 │   │   ├── ProcessImage.cs            # 按映像路径识别 / 结束进程
